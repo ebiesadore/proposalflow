@@ -31,7 +31,7 @@ import ProjectDetailsTab from './components/ProjectDetailsTab';
 const NewProposalCreationWorkspace = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { addToast } = useToast();
+  const { showToast: addToast } = useToast();
   const [mainSidebarCollapsed, setMainSidebarCollapsed] = useState(true);
   const [proposalSidebarCollapsed, setProposalSidebarCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState('proposal-summary');
@@ -196,28 +196,47 @@ const sessionProposalId = sessionStorage.getItem('currentProposalId');
 
   // Calculate proposal totals from formData
   const proposalTotals = useMemo(() => {
-    const internalValueAdded = (formData?.internalValueAddedScope || [])?.reduce((sum, item) => sum + (parseFloat(item?.totalCost) || 0), 0);
-    const marginedSubContractors = (formData?.marginedSubContractors || [])?.reduce((sum, item) => sum + (parseFloat(item?.totalCost) || 0), 0);
-    const zeroMarginedSupply = (formData?.zeroMarginedSupply || [])?.reduce((sum, item) => sum + (parseFloat(item?.totalCost) || 0), 0);
+    const internalValueAdded = (Array.isArray(formData?.internalValueAddedScope) ? formData?.internalValueAddedScope : [])?.reduce((sum, item) => sum + (parseFloat(item?.productionCost) || 0), 0);
+    const marginedSubContractors = (Array.isArray(formData?.marginedSubContractors) ? formData?.marginedSubContractors : [])?.reduce((sum, item) => sum + (parseFloat(item?.totalCost) || 0), 0);
+    const zeroMarginedSupply = (Array.isArray(formData?.zeroMarginedSupply) ? formData?.zeroMarginedSupply : [])?.reduce((sum, item) => sum + (parseFloat(item?.totalCost) || 0), 0);
     
     // Calculate materials total
-    const modules = formData?.modules || [];
+    const modules = Array.isArray(formData?.modules) ? formData?.modules : [];
     const totalAreaFt2 = modules?.reduce((sum, m) => {
       const quantity = parseFloat(m?.quantity) || 0;
       const areaFt2 = parseFloat(m?.areaFeet) || 0;
       return sum + (quantity * areaFt2);
     }, 0);
-    const materials = formData?.materials || [];
+    const materials = Array.isArray(formData?.materials) ? formData?.materials : [];
     const costPerSqFtTotal = materials?.reduce((sum, item) => sum + (parseFloat(item?.costWastePSQF) || 0), 0);
     let materialsTotal = costPerSqFtTotal * totalAreaFt2;
     
-    const labour = (formData?.labour || [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
-    const totalOverHead = (formData?.overheads || [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
-    const siteCostsTotal = (formData?.siteCosts || [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
-    const logisticsTotal = (formData?.logistics || [])?.length > 0 ? (parseFloat(formData?.logistics?.[0]?.totalLogistics) || 0) : 0;
-    const commission = formData?.commission || 0;
+    // Calculate Labour Project Mod Total = (Labour Total ÷ smallestModuleAreaFt2) × totalAreaFt2
+    const labourRawTotal = (Array.isArray(formData?.labour) ? formData?.labour : [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
+    const categoryPriority = ['ppvc-module', 'floor-cassettes', 'roof-cassettes', 'roof-modules-flat', 'roof-module-pitched', 'roof-module-hybrid', 'panelized-module', 'kit-of-parts'];
+    let smallestModuleAreaFt2 = 0;
+    for (const category of categoryPriority) {
+      const categoryModules = modules?.filter(m => m?.category === category);
+      if (categoryModules?.length > 0) {
+        const smallestModule = categoryModules?.reduce((min, module) => {
+          const currentAreaFt2 = parseFloat(module?.areaFeet) || 0;
+          const minAreaFt2 = parseFloat(min?.areaFeet) || 0;
+          return currentAreaFt2 < minAreaFt2 ? module : min;
+        }, categoryModules?.[0]);
+        smallestModuleAreaFt2 = parseFloat(smallestModule?.areaFeet) || 0;
+        break;
+      }
+    }
+    const labourCostPSQF = smallestModuleAreaFt2 > 0 ? labourRawTotal / smallestModuleAreaFt2 : 0;
+    const labour = labourCostPSQF * totalAreaFt2;
+
+const overheadCalc = formData?.overheadCalculations || {};
+const totalOverHead = ['design', 'procurement', 'general', 'production', 'project']?.reduce((sum, section) => sum + (parseFloat(overheadCalc?.[section]?.totalOH) || 0), 0);
+    const siteCostsTotal = (Array.isArray(formData?.siteCosts) ? formData?.siteCosts : [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
+    const logisticsTotal = Array.isArray(formData?.logistics) && formData?.logistics?.length > 0 ? (parseFloat(formData?.logistics?.[0]?.totalLogistics) || 0) : 0;
+    const commission = (Array.isArray(formData?.commissionItems) ? formData?.commissionItems : [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
     const finance = formData?.financing?.total || 0;
-    const risk = (formData?.risks || [])?.reduce((sum, item) => sum + (parseFloat(item?.cost) || 0), 0);
+    const risk = (Array.isArray(formData?.risks) ? formData?.risks : [])?.reduce((sum, item) => sum + (parseFloat(item?.cost) || 0), 0);
     
     const grandTotal = internalValueAdded + marginedSubContractors + zeroMarginedSupply + materialsTotal + labour + totalOverHead + siteCostsTotal + logisticsTotal + commission + finance + risk;
     
@@ -235,7 +254,7 @@ const sessionProposalId = sessionStorage.getItem('currentProposalId');
       risk,
       grandTotal
     };
-  }, [formData?.internalValueAddedScope, formData?.marginedSubContractors, formData?.zeroMarginedSupply, formData?.modules, formData?.materials, formData?.labour, formData?.overheads, formData?.siteCosts, formData?.logistics, formData?.commission, formData?.financing, formData?.risks]);
+  }, [formData?.internalValueAddedScope, formData?.marginedSubContractors, formData?.zeroMarginedSupply, formData?.modules, formData?.materials, formData?.labour, formData?.overheadCalculations, formData?.siteCosts, formData?.logistics, formData?.commissionItems, formData?.financing, formData?.risks]);
 
   // Load existing proposal data if editing
   useEffect(() => {
@@ -861,7 +880,7 @@ const sessionProposalId = sessionStorage.getItem('currentProposalId');
 
     // Calculate Internal Value-Added Scope Total
     const internalValueAddedTotal = (formData?.internalValueAddedScope || [])?.reduce((sum, item) => {
-      const total = parseFloat(item?.totalCost) || 0;
+      const total = parseFloat(item?.productionCost) || 0;
       console.log('Internal Value-Added:', { description: item?.description, total });
       return sum + total;
     }, 0);
@@ -896,11 +915,7 @@ const sessionProposalId = sessionStorage.getItem('currentProposalId');
 
         // Calculate $ / Ft² / W Total (sum of all costWastePSQF)
         const materials = formData?.materials || [];
-        const costPerSqFtTotal = materials?.reduce((sum, item) => {
-          const costWastePSQF = parseFloat(item?.costWastePSQF) || 0;
-          console.log('Material:', { description: item?.description, costWastePSQF });
-          return sum + costWastePSQF;
-        }, 0);
+        const costPerSqFtTotal = materials?.reduce((sum, item) => sum + (parseFloat(item?.costWastePSQF) || 0), 0);
         console.log('Cost Per Sq Ft Total ($ / Ft² / W Total):', costPerSqFtTotal);
 
         // Project Mod Total = costPerSqFtTotal × totalAreaFt2
@@ -909,13 +924,38 @@ const sessionProposalId = sessionStorage.getItem('currentProposalId');
         return projectModTotal;
       })();
 
-      // Add Labour Total
-      labourTotal = (formData?.labour || [])?.reduce((sum, item) => {
-        const total = parseFloat(item?.total) || 0;
-        console.log('Labour:', { description: item?.description, total });
-        return sum + total;
-      }, 0);
-      console.log('Labour Total:', labourTotal);
+      // Add Labour Total using Project Mod Total formula: (Labour Total ÷ smallestModuleAreaFt2) × totalAreaFt2
+      labourTotal = (() => {
+        const labourRawTotal = (formData?.labour || [])?.reduce((sum, item) => {
+          const total = parseFloat(item?.total) || 0;
+          return sum + total;
+        }, 0);
+        const categoryPriority = ['ppvc-module', 'floor-cassettes', 'roof-cassettes', 'roof-modules-flat', 'roof-module-pitched', 'roof-module-hybrid', 'panelized-module', 'kit-of-parts'];
+        const modules = formData?.modules || [];
+        const totalAreaFt2 = modules?.reduce((sum, m) => {
+          const quantity = parseFloat(m?.quantity) || 0;
+          const areaFt2 = parseFloat(m?.areaFeet) || 0;
+          return sum + (quantity * areaFt2);
+        }, 0);
+        let smallestModuleAreaFt2 = 0;
+        for (const category of categoryPriority) {
+          const categoryModules = modules?.filter(m => m?.category === category);
+          if (categoryModules?.length > 0) {
+            const smallestModule = categoryModules?.reduce((min, module) => {
+              const currentAreaFt2 = parseFloat(module?.areaFeet) || 0;
+              const minAreaFt2 = parseFloat(min?.areaFeet) || 0;
+              return currentAreaFt2 < minAreaFt2 ? module : min;
+            }, categoryModules?.[0]);
+            smallestModuleAreaFt2 = parseFloat(smallestModule?.areaFeet) || 0;
+            break;
+          }
+        }
+        const labourCostPSQF = smallestModuleAreaFt2 > 0 ? labourRawTotal / smallestModuleAreaFt2 : 0;
+        const projectModTotal = labourCostPSQF * totalAreaFt2;
+        console.log('Labour Total (Project Mod Total):', projectModTotal, '= (', labourRawTotal, '/', smallestModuleAreaFt2, ') ×', totalAreaFt2);
+        return projectModTotal;
+      })();
+      console.log('Labour Total (Project Mod Total):', labourTotal);
     } else {
       console.log('Chargeable mode: Excluding Materials Total and Labour Total');
     }
@@ -1054,17 +1094,16 @@ const sessionProposalId = sessionStorage.getItem('currentProposalId');
 
   // Calculate M² Rate BUA and Ft² Rate BUA
   const calculateRateBUA = useCallback(() => {
-    // CRITICAL FIX: Read directly from formData.revenueCenters.grandTotal
-    // Revenue Centers tab already calculates and saves this value
-    // No need to recalculate - just display what was saved
+    // FIX: Use Chargeable + Zero Rated (from Proposal Summary) as numerator for Ft² Rate BUA
+    const chargeablePlusZeroRated = calculateChargeableValue();
     const grandTotal = formData?.revenueCenters?.grandTotal || 0;
     const areas = calculateModuleTotalAreas();
 
     const m2RateBUA = areas?.m2 > 0 ? grandTotal / areas?.m2 : 0;
-    const ft2RateBUA = areas?.ft2 > 0 ? grandTotal / areas?.ft2 : 0;
+    const ft2RateBUA = areas?.ft2 > 0 ? chargeablePlusZeroRated / areas?.ft2 : 0;
 
     return { m2RateBUA, ft2RateBUA };
-  }, [formData?.revenueCenters?.grandTotal, calculateModuleTotalAreas]);
+  }, [formData?.revenueCenters?.grandTotal, calculateModuleTotalAreas, calculateChargeableValue]);
 
   // CRITICAL FIX: Memoize the rate calculation result to prevent recalculation loops
   const rateBUA = useMemo(() => calculateRateBUA(), [calculateRateBUA]);
@@ -1141,7 +1180,7 @@ const sessionProposalId = sessionStorage.getItem('currentProposalId');
                   </div>
                   <div>
                     <p className="text-sm font-medium text-gray-700 dark:text-muted-foreground mb-1">Ft² Rate BUA</p>
-                    <p className="text-2xl font-bold dark:text-foreground">${formatNumber(calculateChargeableValue())}</p>
+                    <p className="text-2xl font-bold dark:text-foreground">${formatNumber(rateBUA?.ft2RateBUA)}</p>
                   </div>
                 </div>
               </div>

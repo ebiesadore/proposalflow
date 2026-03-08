@@ -94,11 +94,13 @@ const MaterialLibraryManagement = () => {
   const fetchMaterials = async () => {
     try {
       setLoading(true);
+      setError('');
       const data = await materialService?.searchMaterials(searchQuery, categoryFilter || null);
       setMaterials(data);
     } catch (err) {
       console.error('Error fetching materials:', err);
       setError(err?.message || 'Failed to load materials');
+      setMaterials([]);
     } finally {
       setLoading(false);
     }
@@ -236,6 +238,16 @@ const MaterialLibraryManagement = () => {
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
                   <p className="text-muted-foreground">Loading materials...</p>
                 </div>
+              </div>
+            ) : error ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Icon name="AlertCircle" size={48} className="text-red-500 mb-4" />
+                <p className="text-foreground font-medium text-lg mb-2">Failed to load materials</p>
+                <p className="text-sm text-muted-foreground mb-4">{error}</p>
+                <Button onClick={fetchMaterials}>
+                  <Icon name="RefreshCw" size={18} className="mr-2" />
+                  Retry
+                </Button>
               </div>
             ) : materials?.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12">

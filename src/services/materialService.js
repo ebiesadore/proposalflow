@@ -104,13 +104,13 @@ export const materialService = {
 
     async searchMaterials(searchQuery, categoryFilter = null) {
         try {
-            const user = await getAuthUser();
+            const user = getAuthUser();
 
             let query = supabase
                 ?.from("materials_library")
                 ?.select("*")
                 ?.eq("user_id", user?.id)
-                ?.eq("is_active", true);
+                ?.neq("is_active", false);
 
             if (searchQuery) {
                 query = query?.or(`name.ilike.%${searchQuery}%,category.ilike.%${searchQuery}%`);
@@ -130,7 +130,7 @@ export const materialService = {
                     throw error;
                 }
                 console.error("Data error:", error?.message);
-                return [];
+                throw error;
             }
 
             return data || [];

@@ -671,6 +671,14 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
               const hours = DecimalMath?.parse(field === 'hours' ? value : updated?.hours, 0);
               const rate = DecimalMath?.parse(field === 'rate' ? value : updated?.rate, 0);
               updated.total = DecimalMath?.multiply(hours, rate);
+
+              // Calculate labourCostPSQF = total ÷ moduleAreaFT2
+              const moduleAreaFt2 = estimationModel === 'per-module-price'
+                ? DecimalMath?.parse(entry?.moduleAreaFT2, 0)
+                : getSmallestPPVCModuleAreaFt2();
+              updated.labourCostPSQF = moduleAreaFt2 > 0
+                ? DecimalMath?.divide(updated?.total, moduleAreaFt2)
+                : 0;
             }
 
             return updated;
@@ -994,12 +1002,16 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
                         <div className="px-4 py-2 text-base font-bold bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md min-w-[120px] text-right transition-colors">
                           ${formatNumber(entry?.materials?.reduce((sum, material) => sum + DecimalMath?.parse(material?.costWastePSQF, 0), 0), 2)}
                         </div>
-                        <span className="text-base font-semibold ml-4 text-gray-900 dark:text-gray-100">Single Mod Total</span>
+                      </div>
+
+                      {/* Per Module Price Total */}
+                      <div className="flex justify-end items-center gap-4 mt-4">
+                        <span className="text-base font-semibold text-gray-900 dark:text-gray-100">Per Module Price Total</span>
                         <div className="px-4 py-2 text-base font-bold bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md min-w-[120px] text-right transition-colors">
                           ${formatNumber(entry?.materials?.reduce((sum, material) => sum + DecimalMath?.parse(material?.perModulePrice, 0), 0), 2)}
                         </div>
                       </div>
-                      
+
                       {/* Project Mod Total - Only show in Single Module Template */}
                       {estimationModel === 'single-module' && (
                         <div className="flex justify-end items-center gap-4 mt-4">
@@ -1013,9 +1025,6 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
                               2
                             )}
                           </div>
-                          <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
-                            ($ / Ft² / W Total × Area: {formatNumber(getTotalAreaFromModularBuildUp(), 2)} Ft²)
-                          </span>
                         </div>
                       )}
                     </div>
@@ -1023,11 +1032,50 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
                     {/* Labor Total - Right Side (1 part) */}
                     <div className="col-span-1 pl-6">
                       <div className="flex justify-end items-center gap-4">
+                        <span className="text-base font-semibold text-gray-900 dark:text-gray-100">Total Labour Hrs</span>
+                        <div className="px-4 py-2 text-base font-bold bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md min-w-[100px] text-right transition-colors">
+                          {formatNumber(entry?.labour?.reduce((sum, l) => sum + DecimalMath?.parse(l?.hours, 0), 0), 0)}
+                        </div>
+                      </div>
+                      <div className="flex justify-end items-center gap-4 mt-2">
+                        <span className="text-base font-semibold text-gray-900 dark:text-gray-100">$ / Ft² / W Total</span>
+                        <div className="px-4 py-2 text-base font-bold bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md min-w-[120px] text-right transition-colors">
+                          ${formatNumber(
+                            (() => {
+                              const labourTotal = entry?.labour?.reduce((sum, l) => sum + DecimalMath?.parse(l?.total, 0), 0);
+                              const moduleAreaFt2 = estimationModel === 'per-module-price'
+                                ? DecimalMath?.parse(entry?.moduleAreaFT2, 0)
+                                : getSmallestPPVCModuleAreaFt2();
+                              return moduleAreaFt2 > 0 ? DecimalMath?.divide(labourTotal, moduleAreaFt2) : 0;
+                            })(),
+                            2
+                          )}
+                        </div>
                         <span className="text-base font-semibold text-gray-900 dark:text-gray-100">Labor Total</span>
                         <div className="px-4 py-2 text-base font-bold bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md min-w-[120px] text-right transition-colors">
                           ${formatNumber(entry?.labour?.reduce((sum, labour) => sum + DecimalMath?.parse(labour?.total, 0), 0), 2)}
                         </div>
                       </div>
+
+                      {/* Labour Project Mod Total - Only show in Single Module Template */}
+                      {estimationModel === 'single-module' && (
+                        <div className="flex justify-end items-center gap-4 mt-4">
+                          <span className="text-base font-semibold text-gray-900 dark:text-gray-100">Labour Project Mod Total</span>
+                          <div className="px-4 py-2 text-base font-bold bg-primary/10 dark:bg-primary/20 text-primary dark:text-primary rounded-md min-w-[120px] text-right transition-colors border-2 border-primary/30">
+                            ${formatNumber(
+                              DecimalMath?.multiply(
+                                (() => {
+                                  const labourTotal = entry?.labour?.reduce((sum, l) => sum + DecimalMath?.parse(l?.total, 0), 0);
+                                  const moduleAreaFt2 = getSmallestPPVCModuleAreaFt2();
+                                  return moduleAreaFt2 > 0 ? DecimalMath?.divide(labourTotal, moduleAreaFt2) : 0;
+                                })(),
+                                getTotalAreaFromModularBuildUp()
+                              ),
+                              2
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
