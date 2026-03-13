@@ -69,7 +69,9 @@ const errorTracker = {
     },
 
     isThresholdExceeded() {
-        return this.getRecentErrorCount() >= DEFAULT_CONFIG?.errorThreshold;
+        // Always return false — threshold-based blocking causes all services to fail
+        // when any single table/query accumulates errors. We track for logging only.
+        return false;
     },
 
     reset() {
@@ -258,12 +260,11 @@ export const retryWithBackoff = async (operation, options = {}) => {
     // Check if error threshold is exceeded
     if (errorTracker?.isThresholdExceeded()) {
         console.warn(
-            `[Retry] Error threshold exceeded (${errorTracker?.getRecentErrorCount()}/${DEFAULT_CONFIG?.errorThreshold} in ${DEFAULT_CONFIG?.thresholdWindowMs}ms). Failing fast for: ${context}`,
+            `[Retry] Error threshold exceeded (${errorTracker?.getRecentErrorCount()}/${DEFAULT_CONFIG?.errorThreshold} in ${DEFAULT_CONFIG?.thresholdWindowMs}ms) for: ${context}. Proceeding anyway.`,
         );
-        throw new RetryError("System error threshold exceeded. Please try again later.", null, {
-            thresholdExceeded: true,
-            recentErrors: errorTracker.getRecentErrorCount(),
-        });
+        // NOTE: We intentionally do NOT throw here. Throwing would block ALL queries
+        // across the entire app whenever any single table/service accumulates 5 errors.
+        // Instead, we just warn and let the operation proceed normally.
     }
 
     for (let attempt = 0; attempt <= config?.maxRetries; attempt++) {

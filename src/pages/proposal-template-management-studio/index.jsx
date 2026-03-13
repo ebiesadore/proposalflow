@@ -1,226 +1,150 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Sidebar from '../../components/ui/Sidebar';
 import Breadcrumb from '../../components/ui/Breadcrumb';
 import SystemsConfigTabs from '../../components/ui/SystemsConfigTabs';
 import RoleBasedAccess from '../../components/ui/RoleBasedAccess';
 import Icon from '../../components/AppIcon';
-import Button from '../../components/ui/Button';
-import Input from '../../components/ui/Input';
-import Select from '../../components/ui/Select';
-import TemplateCard from './components/TemplateCard';
-import TemplateEditor from './components/TemplateEditor';
-import VersionHistory from './components/VersionHistory';
+import MaterialLabourTemplateList from './components/MaterialLabourTemplateList';
+import MaterialLabourTemplateBuilder from './components/MaterialLabourTemplateBuilder';
+import ContentLibraryTab from './components/ContentLibraryTab';
+import ExportTemplatesTab from './components/ExportTemplatesTab';
 import BulkOperationsPanel from './components/BulkOperationsPanel';
-import ComponentLibrary from './components/ComponentLibrary';
+import { getExportTemplates, deleteExportTemplate } from '../../services/templateService';
+
+// ---- Studio Tabs ----
+const STUDIO_TABS = [
+  { id: 'proposal', label: 'Proposal Templates', icon: 'FileText' },
+  { id: 'content-library', label: 'Content Library', icon: 'BookOpen' },
+  { id: 'material-labour', label: 'Material & Labour Templates', icon: 'Layers' },
+  { id: 'export', label: 'Export Templates', icon: 'Download' },
+];
 
 const ProposalTemplateManagementStudio = () => {
+  const navigate = useNavigate();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [selectedStatus, setSelectedStatus] = useState('all');
-  const [sortBy, setSortBy] = useState('modified');
-  const [viewMode, setViewMode] = useState('grid');
-  const [selectedTemplates, setSelectedTemplates] = useState([]);
-  const [activeTemplate, setActiveTemplate] = useState(null);
-  const [showEditor, setShowEditor] = useState(false);
-  const [showVersionHistory, setShowVersionHistory] = useState(false);
-  const [showComponentLibrary, setShowComponentLibrary] = useState(false);
-  const [previewMode, setPreviewMode] = useState('online');
+  const [studioTab, setStudioTab] = useState('proposal');
 
-  const templates = [
-    {
-      id: 1,
-      name: 'Standard Business Proposal',
-      version: '3.2',
-      category: 'Standard',
-      status: 'active',
-      lastModified: '2026-01-27T10:30:00',
-      lastModifiedBy: 'Sarah Johnson',
-      usageCount: 156,
-      content: '<h1>Business Proposal</h1>\n<p>Dear {{client_name}},</p>\n<p>We are pleased to present this comprehensive proposal for {{project_title}}.</p>',
-    },
-    {
-      id: 2,
-      name: 'Technical Implementation Proposal',
-      version: '2.8',
-      category: 'Technical',
-      status: 'active',
-      lastModified: '2026-01-26T14:20:00',
-      lastModifiedBy: 'Michael Chen',
-      usageCount: 89,
-      content: '<h1>Technical Proposal</h1>\n<p>Technical specifications and implementation details.</p>',
-    },
-    {
-      id: 3,
-      name: 'Financial Services Agreement',
-      version: '4.1',
-      category: 'Financial',
-      status: 'active',
-      lastModified: '2026-01-25T09:15:00',
-      lastModifiedBy: 'David Martinez',
-      usageCount: 234,
-      content: '<h1>Financial Agreement</h1>\n<p>Financial terms and conditions.</p>',
-    },
-    {
-      id: 4,
-      name: 'Marketing Campaign Proposal',
-      version: '1.5',
-      category: 'Marketing',
-      status: 'draft',
-      lastModified: '2026-01-24T16:45:00',
-      lastModifiedBy: 'Emily Rodriguez',
-      usageCount: 45,
-      content: '<h1>Marketing Proposal</h1>\n<p>Campaign strategy and execution plan.</p>',
-    },
-    {
-      id: 5,
-      name: 'Legal Consulting Agreement',
-      version: '5.0',
-      category: 'Legal',
-      status: 'active',
-      lastModified: '2026-01-23T11:30:00',
-      lastModifiedBy: 'Robert Taylor',
-      usageCount: 178,
-      content: '<h1>Legal Agreement</h1>\n<p>Legal terms and consulting services.</p>',
-    },
-    {
-      id: 6,
-      name: 'IT Infrastructure Proposal',
-      version: '2.3',
-      category: 'Technical',
-      status: 'active',
-      lastModified: '2026-01-22T13:00:00',
-      lastModifiedBy: 'Jennifer Lee',
-      usageCount: 67,
-      content: '<h1>IT Infrastructure</h1>\n<p>Infrastructure setup and maintenance.</p>',
-    },
-    {
-      id: 7,
-      name: 'Consulting Services Template',
-      version: '3.7',
-      category: 'Standard',
-      status: 'archived',
-      lastModified: '2026-01-20T08:45:00',
-      lastModifiedBy: 'William Brown',
-      usageCount: 312,
-      content: '<h1>Consulting Services</h1>\n<p>Professional consulting engagement.</p>',
-    },
-    {
-      id: 8,
-      name: 'Product Development Proposal',
-      version: '1.2',
-      category: 'Technical',
-      status: 'draft',
-      lastModified: '2026-01-19T15:20:00',
-      lastModifiedBy: 'Amanda Wilson',
-      usageCount: 23,
-      content: '<h1>Product Development</h1>\n<p>Development roadmap and milestones.</p>',
-    },
-  ];
+  // ---- Export Templates (Proposal Templates tab) — from Supabase ----
+  const [exportTemplates, setExportTemplates] = useState([]);
+  const [exportTemplatesLoading, setExportTemplatesLoading] = useState(false);
+  const [exportTemplatesError, setExportTemplatesError] = useState(null);
+  const [exportTemplateSearch, setExportTemplateSearch] = useState('');
 
-  const categoryOptions = [
-    { value: 'all', label: 'All Categories' },
-    { value: 'Standard', label: 'Standard' },
-    { value: 'Technical', label: 'Technical' },
-    { value: 'Financial', label: 'Financial' },
-    { value: 'Marketing', label: 'Marketing' },
-    { value: 'Legal', label: 'Legal' },
-  ];
+  // ---- Delete confirmation state ----
+  const [deleteTarget, setDeleteTarget] = useState(null); // template to delete
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const statusOptions = [
-    { value: 'all', label: 'All Status' },
-    { value: 'active', label: 'Active' },
-    { value: 'draft', label: 'Draft' },
-    { value: 'archived', label: 'Archived' },
-  ];
+  // ---- Copy state ----
+  const [copyingId, setCopyingId] = useState(null);
 
-  const sortOptions = [
-    { value: 'modified', label: 'Last Modified' },
-    { value: 'name', label: 'Name' },
-    { value: 'usage', label: 'Usage Count' },
-    { value: 'version', label: 'Version' },
-  ];
+  // ---- Material & Labour Templates state ----
+  const [mlView, setMlView] = useState('list');
+  const [editingTemplate, setEditingTemplate] = useState(null);
 
-  const filteredTemplates = templates?.filter(template => {
-      const matchesSearch = template?.name?.toLowerCase()?.includes(searchQuery?.toLowerCase());
-      const matchesCategory = selectedCategory === 'all' || template?.category === selectedCategory;
-      const matchesStatus = selectedStatus === 'all' || template?.status === selectedStatus;
-      return matchesSearch && matchesCategory && matchesStatus;
-    })?.sort((a, b) => {
-      switch (sortBy) {
-        case 'name':
-          return a?.name?.localeCompare(b?.name);
-        case 'usage':
-          return b?.usageCount - a?.usageCount;
-        case 'version':
-          return parseFloat(b?.version) - parseFloat(a?.version);
-        case 'modified':
-        default:
-          return new Date(b.lastModified) - new Date(a.lastModified);
+  // Load export templates when Proposal Templates tab is active
+  useEffect(() => {
+    if (studioTab !== 'proposal') return;
+    const load = async () => {
+      setExportTemplatesLoading(true);
+      setExportTemplatesError(null);
+      try {
+        const data = await getExportTemplates();
+        setExportTemplates(data || []);
+      } catch (err) {
+        setExportTemplatesError(err?.message || 'Failed to load export templates');
+      } finally {
+        setExportTemplatesLoading(false);
       }
-    });
+    };
+    load();
+  }, [studioTab]);
 
-  const handleTemplateSelect = (id, checked) => {
-    setSelectedTemplates(prev =>
-      checked ? [...prev, id] : prev?.filter(templateId => templateId !== id)
-    );
+  // ---- Edit handler — navigate to Export Designer with template data ----
+  const handleEditTemplate = (tmpl) => {
+    navigate('/proposal-export-template-designer', { state: { editTemplate: tmpl } });
   };
 
-  const handleSelectAll = () => {
-    if (selectedTemplates?.length === filteredTemplates?.length) {
-      setSelectedTemplates([]);
-    } else {
-      setSelectedTemplates(filteredTemplates?.map(t => t?.id));
+  // ---- Delete handlers ----
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await deleteExportTemplate(deleteTarget?.id);
+      setExportTemplates(prev => prev?.filter(t => t?.id !== deleteTarget?.id));
+      setDeleteTarget(null);
+    } catch (err) {
+      console.error('Delete template error:', err);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
-  const handleEdit = (template) => {
-    setActiveTemplate(template);
-    setShowEditor(true);
-  };
-
-  const handleDuplicate = (template) => {
-    alert(`Duplicating template: ${template?.name}`);
-  };
-
-  const handleArchive = (template) => {
-    if (window.confirm(`Archive template "${template?.name}"?`)) {
-      alert(`Template "${template?.name}" archived successfully`);
+  // ---- Copy handler ----
+  const handleCopyTemplate = async (tmpl) => {
+    setCopyingId(tmpl?.id);
+    try {
+      const { data, error } = await import('../../lib/supabase')?.then(m => {
+        return m?.supabase
+          ?.from('export_templates')
+          ?.insert({
+            name: `${tmpl?.name} Copy`,
+            template_type: tmpl?.templateType || 'pdf',
+            layout_config: tmpl?.layoutConfig || {},
+            cover_page_settings: tmpl?.coverPageSettings || {},
+            header_settings: tmpl?.headerSettings || {},
+            footer_settings: tmpl?.footerSettings || {},
+            is_default: false,
+            is_active: true,
+            created_by: tmpl?.createdBy || null,
+          })
+          ?.select()
+          ?.single();
+      });
+      if (error) throw error;
+      // Map the new record and prepend to list
+      const newTmpl = {
+        id: data?.id,
+        name: data?.name,
+        templateType: data?.template_type,
+        layoutConfig: data?.layout_config,
+        coverPageSettings: data?.cover_page_settings,
+        headerSettings: data?.header_settings,
+        footerSettings: data?.footer_settings,
+        isDefault: data?.is_default,
+        isActive: data?.is_active,
+        createdBy: data?.created_by,
+        createdAt: data?.created_at,
+        updatedAt: data?.updated_at,
+      };
+      setExportTemplates(prev => [newTmpl, ...prev]);
+    } catch (err) {
+      console.error('Copy template error:', err);
+    } finally {
+      setCopyingId(null);
     }
   };
 
-  const handlePreview = (template) => {
-    setActiveTemplate(template);
-    setShowEditor(true);
+  // ---- Material & Labour handlers ----
+  const handleMlCreateNew = () => {
+    setEditingTemplate(null);
+    setMlView('builder');
   };
 
-  const handleSaveTemplate = (updatedTemplate) => {
-    alert(`Template "${updatedTemplate?.name}" saved successfully`);
-    setShowEditor(false);
-    setActiveTemplate(null);
+  const handleMlEdit = (template) => {
+    setEditingTemplate(template);
+    setMlView('builder');
   };
 
-  const handleBulkAction = (action) => {
-    alert(`Applying ${action} to ${selectedTemplates?.length} templates`);
-    setSelectedTemplates([]);
+  const handleMlSave = () => {
+    setMlView('list');
+    setEditingTemplate(null);
   };
 
-  const handleVersionRestore = (version) => {
-    alert(`Restoring version ${version?.version}`);
-    setShowVersionHistory(false);
+  const handleMlCancel = () => {
+    setMlView('list');
+    setEditingTemplate(null);
   };
-
-  const handleInsertComponent = (content) => {
-    alert('Component inserted into editor');
-    setShowComponentLibrary(false);
-  };
-
-  const stats = [
-    { label: 'Total Templates', value: templates?.length, icon: 'FileText', color: 'text-primary' },
-    { label: 'Active', value: templates?.filter(t => t?.status === 'active')?.length, icon: 'CheckCircle', color: 'text-success' },
-    { label: 'Drafts', value: templates?.filter(t => t?.status === 'draft')?.length, icon: 'Edit', color: 'text-warning' },
-    { label: 'Total Usage', value: templates?.reduce((sum, t) => sum + t?.usageCount, 0), icon: 'TrendingUp', color: 'text-accent' },
-  ];
 
   return (
     <RoleBasedAccess requiredPermission="admin">
@@ -253,220 +177,258 @@ const ProposalTemplateManagementStudio = () => {
           <div className="px-4 md:px-6 lg:px-8 py-6 md:py-8">
             <Breadcrumb />
             <div className="max-w-[1600px] mx-auto">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 md:mb-8">
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    iconName="Package"
-                    iconPosition="left"
-                    onClick={() => setShowComponentLibrary(true)}
-                  >
-                    Components
-                  </Button>
-                  <Button
-                    variant="default"
-                    iconName="Plus"
-                    iconPosition="left"
-                    onClick={() => {
-                      setActiveTemplate(null);
-                      setShowEditor(true);
-                    }}
-                  >
-                    New Template
-                  </Button>
+
+              {/* Studio Section Tabs */}
+              <div className="flex justify-center mt-6 mb-8">
+                <div className="flex gap-1 bg-muted/30 p-1.5 rounded-xl border border-border">
+                  {STUDIO_TABS?.map(tab => (
+                    <button
+                      key={tab?.id}
+                      onClick={() => {
+                        setStudioTab(tab?.id);
+                        if (tab?.id === 'material-labour') setMlView('list');
+                      }}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-smooth ${
+                        studioTab === tab?.id
+                          ? 'bg-card text-foreground shadow-sm border border-border'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <Icon name={tab?.icon} size={15} />
+                      {tab?.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6 md:mb-8">
-                {stats?.map((stat) => (
-                  <div
-                    key={stat?.label}
-                    className="bg-card border border-border rounded-lg p-4 md:p-5 lg:p-6 transition-smooth hover:shadow-brand"
-                  >
-                    <div className="flex items-center justify-between mb-3">
-                      <div className={`w-10 h-10 md:w-12 md:h-12 rounded-lg bg-muted flex items-center justify-center ${stat?.color}`}>
-                        <Icon name={stat?.icon} size={20} />
-                      </div>
-                    </div>
-                    <p className="text-2xl md:text-3xl font-heading font-bold text-foreground mb-1">
-                      {stat?.value}
-                    </p>
-                    <p className="text-sm text-muted-foreground font-caption">{stat?.label}</p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="bg-card border border-border rounded-xl shadow-brand mb-6">
-                <div className="p-4 md:p-5 lg:p-6 border-b border-border">
-                  <div className="flex flex-col lg:flex-row gap-4">
-                    <div className="flex-1">
-                      <Input
-                        type="search"
-                        placeholder="Search templates..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e?.target?.value)}
-                      />
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 lg:w-auto">
-                      <Select
-                        options={categoryOptions}
-                        value={selectedCategory}
-                        onChange={setSelectedCategory}
-                        placeholder="Category"
-                      />
-                      <Select
-                        options={statusOptions}
-                        value={selectedStatus}
-                        onChange={setSelectedStatus}
-                        placeholder="Status"
-                      />
-                      <Select
-                        options={sortOptions}
-                        value={sortBy}
-                        onChange={setSortBy}
-                        placeholder="Sort by"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-4 md:p-5 lg:p-6 border-b border-border">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedTemplates?.length === filteredTemplates?.length && filteredTemplates?.length > 0}
-                        onChange={handleSelectAll}
-                        className="w-4 h-4 rounded border-border text-primary focus:ring-primary focus:ring-offset-0 transition-smooth"
-                        aria-label="Select all templates"
-                      />
-                      <span className="text-sm font-caption text-muted-foreground">
-                        {selectedTemplates?.length > 0
-                          ? `${selectedTemplates?.length} selected`
-                          : `${filteredTemplates?.length} templates`}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setViewMode('grid')}
-                        className={`w-9 h-9 flex items-center justify-center rounded-lg transition-smooth ${
-                          viewMode === 'grid' ?'bg-primary text-primary-foreground' :'bg-muted text-muted-foreground hover:bg-muted/80'
-                        }`}
-                        aria-label="Grid view"
-                      >
-                        <Icon name="Grid" size={18} />
-                      </button>
-                      <button
-                        onClick={() => setViewMode('list')}
-                        className={`w-9 h-9 flex items-center justify-center rounded-lg transition-smooth ${
-                          viewMode === 'list' ?'bg-primary text-primary-foreground' :'bg-muted text-muted-foreground hover:bg-muted/80'
-                        }`}
-                        aria-label="List view"
-                      >
-                        <Icon name="List" size={18} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-4 md:p-5 lg:p-6">
-                  {filteredTemplates?.length > 0 ? (
-                    <div className={`grid gap-4 md:gap-5 lg:gap-6 ${
-                      viewMode === 'grid' ?'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' :'grid-cols-1'
-                    }`}>
-                      {filteredTemplates?.map((template) => (
-                        <TemplateCard
-                          key={template?.id}
-                          template={template}
-                          onEdit={handleEdit}
-                          onDuplicate={handleDuplicate}
-                          onArchive={handleArchive}
-                          onPreview={handlePreview}
-                          isSelected={selectedTemplates?.includes(template?.id)}
-                          onSelect={handleTemplateSelect}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-12 md:py-16">
-                      <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-4 bg-muted rounded-full flex items-center justify-center">
-                        <Icon name="Search" size={32} className="text-muted-foreground" />
-                      </div>
-                      <h3 className="text-lg md:text-xl font-heading font-semibold text-foreground mb-2">
-                        No templates found
+              {/* ===== PROPOSAL TEMPLATES TAB ===== */}
+              {studioTab === 'proposal' && (
+                <div className="bg-card border border-border rounded-xl shadow-brand">
+                  <div className="p-4 md:p-5 lg:p-6 border-b border-border flex items-center justify-between">
+                    <div>
+                      <h3 className="text-base font-heading font-semibold text-foreground flex items-center gap-2">
+                        <Icon name="Download" size={16} className="text-primary" />
+                        Saved Export Templates
                       </h3>
-                      <p className="text-sm md:text-base text-muted-foreground font-caption mb-6">
-                        Try adjusting your filters or create a new template
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Templates created in the Export Template Designer
                       </p>
-                      <Button
-                        variant="default"
-                        iconName="Plus"
-                        iconPosition="left"
-                        onClick={() => {
-                          setActiveTemplate(null);
-                          setShowEditor(true);
-                        }}
-                      >
-                        Create Template
-                      </Button>
+                    </div>
+                    {exportTemplatesLoading && (
+                      <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                    )}
+                  </div>
+
+                  <div className="p-4 md:p-5 lg:p-6">
+                    {/* Search bar */}
+                    <div className="relative mb-5">
+                      <Icon name="Search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                      <input
+                        type="text"
+                        placeholder="Search templates by name…"
+                        value={exportTemplateSearch}
+                        onChange={e => setExportTemplateSearch(e?.target?.value)}
+                        className="w-full pl-9 pr-4 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                      />
+                      {exportTemplateSearch && (
+                        <button
+                          onClick={() => setExportTemplateSearch('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <Icon name="X" size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    {exportTemplatesError && (
+                      <div className="flex items-center gap-2 px-4 py-3 bg-destructive/10 border border-destructive/20 rounded-lg mb-4">
+                        <Icon name="AlertCircle" size={14} className="text-destructive" />
+                        <p className="text-sm text-destructive">{exportTemplatesError}</p>
+                      </div>
+                    )}
+
+                    {!exportTemplatesLoading && exportTemplates?.length === 0 && !exportTemplatesError && (
+                      <div className="text-center py-10">
+                        <div className="w-12 h-12 mx-auto mb-3 bg-muted rounded-full flex items-center justify-center">
+                          <Icon name="FileOutput" size={20} className="text-muted-foreground" />
+                        </div>
+                        <p className="text-sm font-medium text-foreground mb-1">No export templates yet</p>
+                        <p className="text-xs text-muted-foreground">
+                          Create templates in the Export Template Designer — they'll appear here automatically.
+                        </p>
+                      </div>
+                    )}
+
+                    {exportTemplates?.length > 0 && (() => {
+                      const filtered = exportTemplates?.filter(tmpl =>
+                        tmpl?.name?.toLowerCase()?.includes(exportTemplateSearch?.toLowerCase())
+                      );
+                      if (filtered?.length === 0) {
+                        return (
+                          <div className="text-center py-10">
+                            <div className="w-12 h-12 mx-auto mb-3 bg-muted rounded-full flex items-center justify-center">
+                              <Icon name="SearchX" size={20} className="text-muted-foreground" />
+                            </div>
+                            <p className="text-sm font-medium text-foreground mb-1">No templates found</p>
+                            <p className="text-xs text-muted-foreground">
+                              No templates match "<span className="font-medium">{exportTemplateSearch}</span>". Try a different name.
+                            </p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {filtered?.map(tmpl => {
+                            const pageCount = tmpl?.layoutConfig?.pages?.length || 1;
+                            const lastMod = tmpl?.updatedAt
+                              ? new Date(tmpl?.updatedAt)?.toLocaleDateString()
+                              : tmpl?.createdAt
+                              ? new Date(tmpl?.createdAt)?.toLocaleDateString()
+                              : '—';
+                            const isCopying = copyingId === tmpl?.id;
+                            return (
+                              <div key={tmpl?.id} className="border border-border rounded-xl p-4 hover:border-primary/40 hover:shadow-brand transition-all group">
+                                <div className="flex items-start justify-between gap-2 mb-3">
+                                  <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                                    <Icon name="FileOutput" size={16} className="text-primary" />
+                                  </div>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase tracking-wide ${
+                                    tmpl?.templateType === 'pdf' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary'
+                                  }`}>
+                                    {tmpl?.templateType || 'pdf'}
+                                  </span>
+                                </div>
+                                <p className="text-sm font-semibold text-foreground mb-1 truncate">{tmpl?.name}</p>
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground mb-3">
+                                  <span className="flex items-center gap-1">
+                                    <Icon name="FileText" size={10} />
+                                    {pageCount} {pageCount === 1 ? 'page' : 'pages'}
+                                  </span>
+                                  <span className="flex items-center gap-1">
+                                    <Icon name="Clock" size={10} />
+                                    {lastMod}
+                                  </span>
+                                </div>
+                                {/* Action buttons */}
+                                <div className="flex items-center gap-1.5 pt-2 border-t border-border">
+                                  <button
+                                    onClick={() => handleEditTemplate(tmpl)}
+                                    title="Edit template"
+                                    className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                                  >
+                                    <Icon name="Pencil" size={12} />
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={() => handleCopyTemplate(tmpl)}
+                                    disabled={isCopying}
+                                    title="Copy template"
+                                    className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                  >
+                                    {isCopying ? (
+                                      <><div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />Copying…</>
+                                    ) : (
+                                      <><Icon name="Copy" size={12} />Copy</>
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() => setDeleteTarget(tmpl)}
+                                    title="Delete template"
+                                    className="flex items-center justify-center px-2 py-1.5 rounded-lg text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
+                                  >
+                                    <Icon name="Trash2" size={12} />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {/* ===== CONTENT LIBRARY TAB ===== */}
+              {studioTab === 'content-library' && (
+                <ContentLibraryTab />
+              )}
+
+              {/* ===== MATERIAL & LABOUR TEMPLATES TAB ===== */}
+              {studioTab === 'material-labour' && (
+                <>
+                  {mlView === 'list' && (
+                    <MaterialLabourTemplateList
+                      onCreateNew={handleMlCreateNew}
+                      onEdit={handleMlEdit}
+                    />
+                  )}
+                  {mlView === 'builder' && (
+                    <div className="bg-card border border-border rounded-xl overflow-hidden" style={{ minHeight: '70vh' }}>
+                      <MaterialLabourTemplateBuilder
+                        template={editingTemplate}
+                        onSave={handleMlSave}
+                        onCancel={handleMlCancel}
+                      />
                     </div>
                   )}
-                </div>
-              </div>
+                </>
+              )}
+
+              {/* ===== EXPORT TEMPLATES TAB ===== */}
+              {studioTab === 'export' && (
+                <ExportTemplatesTab />
+              )}
+
             </div>
           </div>
         </main>
 
-        {showEditor && (
-          <div className="fixed inset-0 bg-background z-50 overflow-hidden">
-            <TemplateEditor
-              template={activeTemplate}
-              onSave={handleSaveTemplate}
-              onCancel={() => {
-                setShowEditor(false);
-                setActiveTemplate(null);
-              }}
-              onPreviewToggle={() => setPreviewMode(prev => prev === 'online' ? 'pdf' : 'online')}
-              previewMode={previewMode}
-            />
-            <div className="absolute bottom-6 right-6 flex gap-2">
-              <Button
-                variant="outline"
-                iconName="History"
-                onClick={() => setShowVersionHistory(true)}
-                aria-label="Version history"
-              />
-              <Button
-                variant="outline"
-                iconName="Package"
-                onClick={() => setShowComponentLibrary(true)}
-                aria-label="Component library"
-              />
+        <BulkOperationsPanel
+          selectedCount={0}
+          onClearSelection={() => {}}
+          onBulkAction={() => {}}
+        />
+
+        {/* ===== DELETE CONFIRMATION MODAL ===== */}
+        {deleteTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+                  <Icon name="Trash2" size={18} className="text-destructive" />
+                </div>
+                <div>
+                  <h3 className="text-base font-heading font-semibold text-foreground">Delete Template</h3>
+                  <p className="text-xs text-muted-foreground">This action cannot be undone</p>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground mb-6">
+                Are you sure you want to delete <span className="font-semibold text-foreground">"{deleteTarget?.name}"</span>? This template will be permanently removed from Supabase.
+              </p>
+              <div className="flex items-center gap-3 justify-end">
+                <button
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={isDeleting}
+                  className="px-4 py-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteConfirm}
+                  disabled={isDeleting}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-destructive text-white hover:bg-destructive/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isDeleting ? (
+                    <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Deleting…</>
+                  ) : (
+                    <><Icon name="Trash2" size={14} />Delete</>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         )}
-
-        {showVersionHistory && activeTemplate && (
-          <VersionHistory
-            template={activeTemplate}
-            onRestore={handleVersionRestore}
-            onClose={() => setShowVersionHistory(false)}
-          />
-        )}
-
-        {showComponentLibrary && (
-          <ComponentLibrary
-            onInsert={handleInsertComponent}
-            onClose={() => setShowComponentLibrary(false)}
-          />
-        )}
-
-        <BulkOperationsPanel
-          selectedCount={selectedTemplates?.length}
-          onClearSelection={() => setSelectedTemplates([])}
-          onBulkAction={handleBulkAction}
-        />
       </div>
     </RoleBasedAccess>
   );

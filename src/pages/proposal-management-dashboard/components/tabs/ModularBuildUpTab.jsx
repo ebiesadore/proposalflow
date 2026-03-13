@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import Button from '../../../../components/ui/Button';
 import Icon from '../../../../components/AppIcon';
 import AddModuleModal from '../AddModuleModal';
@@ -11,6 +11,8 @@ const ModularBuildUpTab = ({ formData, onChange, errors }) => {
   const [isAddModuleModalOpen, setIsAddModuleModalOpen] = useState(false);
   const [selectedModules, setSelectedModules] = useState([]);
   const [editingModule, setEditingModule] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+  const dragIndexRef = React.useRef(null);
 
   // Category mapping for display
   const categoryLabels = {
@@ -137,6 +139,35 @@ const ModularBuildUpTab = ({ formData, onChange, errors }) => {
     return Object.values(categoryTotals)?.sort((a, b) => b?.totalFt2 - a?.totalFt2);
   };
 
+  const handleDragStart = (index) => {
+    dragIndexRef.current = index;
+  };
+
+  const handleDragOver = (e, index) => {
+    e?.preventDefault();
+    setDragOverIndex(index);
+  };
+
+  const handleDrop = (index) => {
+    const fromIndex = dragIndexRef?.current;
+    if (fromIndex === null || fromIndex === index) {
+      setDragOverIndex(null);
+      dragIndexRef.current = null;
+      return;
+    }
+    const reordered = [...(formData?.modules || [])];
+    const [moved] = reordered?.splice(fromIndex, 1);
+    reordered?.splice(index, 0, moved);
+    onChange('modules', reordered);
+    setDragOverIndex(null);
+    dragIndexRef.current = null;
+  };
+
+  const handleDragEnd = () => {
+    setDragOverIndex(null);
+    dragIndexRef.current = null;
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -187,7 +218,7 @@ const ModularBuildUpTab = ({ formData, onChange, errors }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-white dark:bg-gray-800 transition-colors">
-                {formData?.modules?.map((module) => {
+                {formData?.modules?.map((module, index) => {
                 const quantity = DecimalMath?.parse(module?.quantity, 0);
                 const costPerUnit = DecimalMath?.parse(module?.costPerUnit, 0);
                 const unitRatePSF = costPerUnit; // Unit Rate $ PSF = Cost per Unit $
@@ -223,7 +254,15 @@ const ModularBuildUpTab = ({ formData, onChange, errors }) => {
                 const volumeFT3 = DecimalMath?.parse(module?.volumeFeet, 0) || DecimalMath?.multiply(volumeM3, 35.3147);
 
                 return (
-                  <tr key={module?.id} className="hover:bg-muted/30 dark:hover:bg-gray-750 transition-colors">
+                  <tr
+                    key={module?.id}
+                    draggable
+                    onDragStart={() => handleDragStart(index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDrop={() => handleDrop(index)}
+                    onDragEnd={handleDragEnd}
+                    className={`hover:bg-muted/30 dark:hover:bg-gray-750 transition-colors${dragOverIndex === index ? ' outline outline-2 outline-primary bg-primary/5' : ''}`}
+                  >
                     <td className="px-2 py-3 text-center">
                       <Icon name="GripVertical" size={16} className="text-muted-foreground cursor-move" />
                     </td>

@@ -104,7 +104,7 @@ export const materialService = {
 
     async searchMaterials(searchQuery, categoryFilter = null) {
         try {
-            const user = getAuthUser();
+            const user = await getAuthUser();
 
             let query = supabase
                 ?.from("materials_library")
@@ -113,7 +113,7 @@ export const materialService = {
                 ?.neq("is_active", false);
 
             if (searchQuery) {
-                query = query?.or(`name.ilike.%${searchQuery}%,category.ilike.%${searchQuery}%`);
+                query = query?.or(`name.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`);
             }
 
             if (categoryFilter) {
@@ -189,7 +189,9 @@ export const materialService = {
             let updateData = {
                 name: materialData?.name,
                 description: materialData?.description,
-                unit_cost: materialData?.unitCost,
+                unit_cost: materialData?.unitCost !== undefined && materialData?.unitCost !== ""
+                    ? parseFloat(materialData?.unitCost) || 0
+                    : 0,
                 unit: materialData?.unit,
                 category: materialData?.category,
                 updated_at: new Date()?.toISOString(),
@@ -223,7 +225,7 @@ export const materialService = {
             const updatedMaterial = data?.[0] || null;
 
             if (!updatedMaterial) {
-                console.warn("No rows were updated for material ID:", id);
+                throw new Error("Failed to update material: no rows were updated. The record may not exist or you may not have permission to edit it.");
             }
 
             return updatedMaterial;

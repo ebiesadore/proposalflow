@@ -18,6 +18,8 @@ import NewProposalCreationWorkspace from "./pages/new-proposal-creation-workspac
 import MaterialLibraryManagement from "./pages/material-library-management";
 import AdditionalScope from "pages/additional-scope";
 import ExternalTrade from "pages/external-trade";
+import ProposalVersionHistoryPanel from "./pages/proposal-version-history-panel";
+import ProposalExportTemplateDesigner from "./pages/proposal-export-template-designer";
 
 const Routes = () => {
     return (
@@ -111,6 +113,22 @@ const Routes = () => {
                         />
                         <Route path="/additional-scope" element={<AdditionalScope />} />
                         <Route path="/external-trade" element={<ExternalTrade />} />
+                        <Route
+                            path="/proposal-version-history-panel"
+                            element={
+                                <ProtectedRoute>
+                                    <ProposalVersionHistoryPanel />
+                                </ProtectedRoute>
+                            }
+                        />
+                        <Route
+                            path="/proposal-export-template-designer"
+                            element={
+                                <ProtectedRoute>
+                                    <ProposalExportTemplateDesigner />
+                                </ProtectedRoute>
+                            }
+                        />
                         <Route path="*" element={<NotFound />} />
                     </RouterRoutes>
                 </RoleProvider>

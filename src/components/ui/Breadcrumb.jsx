@@ -13,7 +13,7 @@ const Breadcrumb = () => {
     '/proposal-management-dashboard': 'Proposal Management',
     '/client-management-dashboard': 'Client Management',
     '/user-management-and-access-control': 'User Management',
-    '/proposal-template-management-studio': 'Template Studio',
+    '/proposal-template-management-studio': 'Template Management Studio',
     '/integrated-email-communication-center': 'Email Center',
     '/pdf-generation-and-document-export-hub': 'Document Export',
     '/system-settings-and-configuration-hub': 'System Settings',

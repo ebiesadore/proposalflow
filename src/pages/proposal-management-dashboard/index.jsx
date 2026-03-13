@@ -101,7 +101,7 @@ const ProposalManagementDashboard = () => {
 
             // Read saved values from proposal data
             const savedGrandTotal = proposal?.revenue_centers?.grandTotal || 0;
-            const savedFt2RateBUA = proposal?.ft2_rate_bua || 0;
+            const savedFt2RateBUA = parseFloat(proposal?.ft2_rate_bua) || 0;
 
             return {
                 id: proposal?.id,
@@ -154,9 +154,9 @@ const ProposalManagementDashboard = () => {
             approved: proposals?.filter((p) => p?.status === "Approved")?.length,
             closed: proposals?.filter((p) => p?.status === "Closed")?.length,
             won: proposals?.filter((p) => p?.status === "Won")?.length,
-            totalArea: proposals
+            totalArea: (proposals
                 ?.filter((p) => p?.status !== "Closed")
-                ?.reduce((sum, p) => sum + (parseFloat(p?.rawData?.project_details?.totalArea) || 0), 0),
+                ?.reduce((sum, p) => sum + (p?.totalAreaFt2 || 0), 0) || 0) * 0.092903,
         };
     }, [proposals]); // CRITICAL: Memoize stats to prevent recalculation on every render
 

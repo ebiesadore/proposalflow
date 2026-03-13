@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Icon from '../../../components/AppIcon';
 import { storageService } from '../../../services/storageService';
+import { proposalService } from '../../../services/proposalService';
 
 import { Checkbox } from '../../../components/ui/Checkbox';
 
@@ -77,6 +78,7 @@ const ProposalDataGrid = ({
   const [contextMenu, setContextMenu] = useState(null);
   const [statusDropdown, setStatusDropdown] = useState(null);
   const [logoUrls, setLogoUrls] = useState({});
+  const [versionNumbers, setVersionNumbers] = useState({});
 
   // FEATURE FLAG: Enhanced loading states
   const LOADING_STATES_ENABLED = import.meta.env?.VITE_ENABLE_LOADING_STATES === 'true';
@@ -132,6 +134,36 @@ const ProposalDataGrid = ({
     };
   }, [proposals]);
 
+  // Fetch latest version numbers for all proposals
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchVersionNumbers = async () => {
+      if (!proposals?.length) return;
+      try {
+        const versionPromises = proposals?.map(async (proposal) => {
+          try {
+            const { data } = await proposalService?.getLatestVersionNumber(proposal?.id);
+            return { proposalId: proposal?.id, versionNumber: data || 0 };
+          } catch {
+            return { proposalId: proposal?.id, versionNumber: 0 };
+          }
+        });
+        const results = await Promise.all(versionPromises);
+        if (isMounted) {
+          const nums = {};
+          results?.forEach(r => { nums[r?.proposalId] = r?.versionNumber; });
+          setVersionNumbers(nums);
+        }
+      } catch (err) {
+        // Silently fail — version badges are non-critical
+      }
+    };
+
+    fetchVersionNumbers();
+    return () => { isMounted = false; };
+  }, [proposals]);
+
   const getStatusColor = (status) => {
     const colors = {
       'Draft': 'bg-gray-500 text-white',
@@ -158,6 +190,15 @@ const ProposalDataGrid = ({
       currency: 'USD',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
+    })?.format(value);
+  };
+
+  const formatCurrencyRate = (value) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
     })?.format(value);
   };
 
@@ -342,12 +383,20 @@ const ProposalDataGrid = ({
                   </div>
                 </td>
                 <td className="px-4 py-4">
-                  <button
-                    onClick={() => onEdit(proposal)}
-                    className="font-caption text-sm text-foreground line-clamp-2 hover:text-primary hover:underline transition-colors text-left"
-                  >
-                    {proposal?.projectName || proposal?.title}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => onEdit(proposal)}
+                      className="font-caption text-sm text-foreground line-clamp-2 hover:text-primary hover:underline transition-colors text-left"
+                    >
+                      {proposal?.projectName || proposal?.title}
+                    </button>
+                    {versionNumbers?.[proposal?.id] > 0 && (
+                      <span className="inline-flex items-center gap-0.5 flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-[#436958]/10 text-[#436958]">
+                        <Icon name="GitBranch" size={10} />
+                        V{versionNumbers?.[proposal?.id]}
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-4 relative">
                   <button
@@ -401,7 +450,7 @@ const ProposalDataGrid = ({
                 </td>
                 <td className="px-4 py-4">
                   <span className="font-caption font-medium text-sm text-foreground whitespace-nowrap">
-                    ${proposal?.ft2RateBUA?.toFixed(2) || '0.00'}
+                    {formatCurrencyRate(parseFloat(proposal?.ft2RateBUA) || 0)}
                   </span>
                 </td>
                 <td className="px-4 py-4">

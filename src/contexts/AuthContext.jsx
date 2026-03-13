@@ -34,22 +34,60 @@ export const AuthProvider = ({ children }) => {
 
         // 1. Listen for auth changes — INITIAL_SESSION is the primary restore path
         try {
-            const { data } = supabase?.auth?.onAuthStateChange((event, session) => {
+            const { data } = supabase?.auth?.onAuthStateChange(async (event, session) => {
                 if (!mounted) return;
                 console.log("[AuthContext] Auth state changed:", event);
 
                 if (event === "INITIAL_SESSION") {
                     console.log("[AuthContext] INITIAL_SESSION received:", session?.user ? "User found" : "No session");
                     markInitialized(session?.user);
+                    if (session?.user) {
+                        supabase?.from("user_profiles")?.upsert(
+                            {
+                                id: session?.user?.id,
+                                email: session?.user?.email,
+                                full_name: session?.user?.user_metadata?.full_name || session?.user?.email?.split("@")?.[0] || "User",
+                                role: "Standard User",
+                            },
+                            { onConflict: "id", ignoreDuplicates: true }
+                        )?.then(({ error }) => {
+                            if (error) console.error("[AuthContext] Profile upsert error:", error);
+                        });
+                    }
                     return;
                 }
 
                 if (event === "TOKEN_REFRESHED") return;
 
+                if (event === "TOKEN_REFRESH_FAILED") {
+                    console.warn("[AuthContext] Token refresh failed — signing out and redirecting to login");
+                    if (mounted) setUser(null);
+                    try {
+                        await supabase?.auth?.signOut();
+                    } catch {
+                        // ignore sign-out errors during refresh failure
+                    }
+                    window.location.href = "/login-and-authentication-portal";
+                    return;
+                }
+
                 if (event === "SIGNED_IN" || event === "USER_UPDATED") {
                     setUser(session?.user ?? null);
                     // Also resolve loading in case INITIAL_SESSION was missed
                     markInitialized(session?.user);
+                    if (session?.user) {
+                        supabase?.from("user_profiles")?.upsert(
+                            {
+                                id: session?.user?.id,
+                                email: session?.user?.email,
+                                full_name: session?.user?.user_metadata?.full_name || session?.user?.email?.split("@")?.[0] || "User",
+                                role: "Standard User",
+                            },
+                            { onConflict: "id", ignoreDuplicates: true }
+                        )?.then(({ error }) => {
+                            if (error) console.error("[AuthContext] Profile upsert error:", error);
+                        });
+                    }
                 } else if (event === "SIGNED_OUT") {
                     if (mounted) setUser(null);
                 }

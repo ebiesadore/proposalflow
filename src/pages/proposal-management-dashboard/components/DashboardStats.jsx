@@ -31,7 +31,7 @@ const DashboardStats = ({ stats }) => {
     },
     {
       label: 'Total Area',
-      value: `${(stats?.totalArea / 1000000)?.toFixed(1)}M²`,
+      value: `${(stats?.totalArea)?.toFixed(1)}M²`,
       icon: 'Truck',
       color: 'bg-success/10 text-success'
     }

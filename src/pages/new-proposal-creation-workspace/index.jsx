@@ -6,7 +6,7 @@ import Sidebar from '../../components/ui/Sidebar';
 import Icon from '../../components/AppIcon';
 import Button from '../../components/ui/Button';
 
-import { useProposalRealtime } from '../../hooks/useProposalRealtime';
+
 import { useSaveQueue } from '../../hooks/useSaveQueue';
 import { proposalService } from '../../services/proposalService';
 import { useToast } from '../../contexts/ToastContext';
@@ -42,11 +42,115 @@ const NewProposalCreationWorkspace = () => {
   const [showNavigationWarning, setShowNavigationWarning] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const autoSaveTimerRef = useRef(null);
+  // Ref to track autoSaveStatus synchronously — avoids stale closure in handleAutoSave guard
+  const autoSaveStatusRef = useRef('unsaved');
   const [isLoadingProposal, setIsLoadingProposal] = useState(false);
+  // Add this block - Missing saveTimeoutRef declaration
   const saveTimeoutRef = useRef(null);
+  // Bug 4 FIX: isProposalLoaded becomes true only after the async load useEffect completes.
+  // Passed to RevenueCentersTab so it knows when real DB data has settled (works for ALL
+  // proposals including new chargeable ones where grandTotal is 0).
+  // For new proposals (no proposalId), it starts as true immediately since there is no async load.
+  const [isProposalLoaded, setIsProposalLoaded] = useState(() => {
+    const navState = (typeof window !== 'undefined' && window.history?.state?.usr) || {};
+    const proposalId = navState?.proposalId || sessionStorage.getItem('currentProposalId') || null;
+    // New proposal — no async load needed, treat as already loaded
+    return !proposalId;
+  });
+  const [currentVersionNumber, setCurrentVersionNumber] = useState(null);
+  const [isCreatingVersion, setIsCreatingVersion] = useState(false);
+  const [showVersionModal, setShowVersionModal] = useState(false);
+  const [versionLabel, setVersionLabel] = useState('');
+  const [versionChangeNotes, setVersionChangeNotes] = useState('');
+  const [isPreviewMode, setIsPreviewMode] = useState(false);
+  const [previewVersionNumber, setPreviewVersionNumber] = useState(null);
+
+  // Add this block - formData state declaration
+  const [formData, setFormData] = useState({
+    projectTitle: '',
+    proposalTitle: '',
+    clientId: '',
+    clientName: '',
+    projectType: '',
+    startDate: '',
+    endDate: '',
+    baseCost: 0,
+    milestones: [],
+    modules: [],
+    marginPercentage: 0,
+    materials: [],
+    labour: [],
+    estimationModel: 'single-module',
+    overheadCalculations: {},
+    siteCosts: [],
+    logistics: [],
+    commission: 0,
+    commissionItems: [],
+    revenueCenters: { revenueType: 'chargeable', chargeableData: {}, marginPercentages: {}, totalMarginPercent: 0 },
+    financing: {},
+    risks: [],
+    paymentTerms: {},
+    internalValueAddedScope: [],
+    marginedSubContractors: [],
+    zeroMarginedSupply: [],
+    projectName: '',
+    clientType: '',
+    country: '',
+    state: '',
+    city: '',
+    projectAddress: '',
+    targetBudgetPerSqft: '',
+    estimatedAreaSqft: '',
+    scope: [],
+    selectedMapLocation: null,
+    design: {},
+    procurement: {},
+    production: {},
+    ft2RateBUA: 0,
+  });
+
+  // CRITICAL FIX: Keep a ref that always holds the latest formData
+  // so handleManualSave reads the current value even if React state hasn't flushed
+  const formDataRef = useRef(formData);
+  useEffect(() => {
+    formDataRef.current = formData;
+  }, [formData]);
+
+  // Keep autoSaveStatusRef in sync with autoSaveStatus state
+  useEffect(() => {
+    autoSaveStatusRef.current = autoSaveStatus;
+  }, [autoSaveStatus]);
+
+  // Add this block - proposalTotals state declaration
+  const [proposalTotals, setProposalTotals] = useState({
+    internalValueAdded: 0,
+    marginedSubContractors: 0,
+    zeroMarginedSupply: 0,
+    materials: 0,
+    labour: 0,
+    totalOverHead: 0,
+    siteCostsTotal: 0,
+    logisticsTotal: 0,
+    commission: 0,
+    finance: 0,
+    risk: 0,
+    grandTotal: 0
+  });
 
   // Track mounted state for cleanup - Move this BEFORE useSaveQueue
   const isMountedRef = useRef(true);
+  // Capture initial navigation state in a ref so it's stable across re-renders
+  // and doesn't cause the load useEffect to re-run when getProposalId changes
+  const initialNavStateRef = useRef(location?.state || {});
+
+  // Add this block - getProposalId helper function
+  const getProposalId = useCallback(() => {
+    return currentProposalId || 
+      initialNavStateRef?.current?.proposalId || 
+      sessionStorage.getItem('currentProposalId') || 
+      null;
+  }, [currentProposalId]);
+
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -66,7 +170,15 @@ const NewProposalCreationWorkspace = () => {
       
       if (proposalId) {
         const { data: updatedProposal, error } = await proposalService?.updateProposal(proposalId, data);
-        if (error) throw error;
+        if (error) {
+          // Treat "no rows affected" as a soft warning, not a fatal throw
+          // This prevents the platform error handler from crashing
+          if (error?.message?.includes('no rows affected')) {
+            console.warn('[saveFn] No rows affected — proposal may not exist or RLS blocked update:', error?.message);
+            return null;
+          }
+          throw error;
+        }
         return updatedProposal;
       } else {
         const newProposal = await proposalService?.createProposal(data);
@@ -82,188 +194,145 @@ const NewProposalCreationWorkspace = () => {
     retryDelay: 1000
   });
 
-  // CRITICAL FIX: Helper function to get proposal ID from multiple sources
-  const getProposalId = useCallback(() => {
-    // Priority order:
-    // 1. currentProposalId state
-    // 2. location.state.proposalId
-    // 3. sessionStorage (for page refreshes)
-    if (currentProposalId) {
-      return currentProposalId;
-    }
-    
-    if (location?.state?.proposalId) {
-      return location?.state?.proposalId;
-    }
-
-const sessionProposalId = sessionStorage.getItem('currentProposalId');
-    if (sessionProposalId && 
-        sessionProposalId !== 'null' && 
-        sessionProposalId !== 'undefined' && 
-        sessionProposalId !== '') {
-      return sessionProposalId;
-    }
-
-    return null;
-  }, [currentProposalId, location?.state?.proposalId]);
-
-  // CRITICAL FIX: Persist proposal ID to sessionStorage whenever it changes
-  useEffect(() => {
-    const proposalId = getProposalId();
-    if (proposalId) {
-      sessionStorage.setItem('currentProposalId', proposalId);
-      // Ensure currentProposalId state is set
-      if (currentProposalId !== proposalId) {
-        setCurrentProposalId(proposalId);
-      }
-    }
-  }, [currentProposalId, location?.state?.proposalId, getProposalId]);
-
-  // CRITICAL FIX: Clear sessionStorage when component unmounts or navigating away
-  useEffect(() => {
-    return () => {
-      // Only clear if we're actually leaving the workspace
-      if (!window.location?.pathname?.includes('new-proposal-creation-workspace')) {
-        sessionStorage.removeItem('currentProposalId');
-      }
-    };
-  }, []);
-
-  // Fetch current proposal data
-  const { currentProposal } = useProposalRealtime(currentProposalId);
-
-
-  const [formData, setFormData] = useState({
-    // Project Details
-    projectTitle: '',
-    clientId: '',
-    clientName: '',
-    projectType: '',
-    
-    // Project Duration
-    startDate: '',
-    endDate: '',
-    milestones: [],
-    
-    // Modular Build Up
-    modules: [],
-    
-    // Cost + Margin
-    baseCost: 0,
-    marginPercentage: 0,
-    
-    // Materials + Labour
-    materials: [],
-    labour: [],
-    estimationModel: 'single-module', // Add estimation model to formData
-    
-    // Over Heads
-    overheads: [],
-    
-    // Site Costs
-    siteCosts: [],
-    
-    // Logistics
-    logistics: [],
-    
-    // Commission
-    commission: 0,
-    commissionItems: [],
-    
-    // Revenue Centers
-    revenueCenters: {
-      revenueType: 'chargeable',
-      chargeableData: {},
-      marginPercentages: {},
-      totalMarginPercent: 0
-    },
-    
-    // Financing
-    financing: {},
-    
-    // Risk
-    risks: [],
-    
-    // Payment Terms
-    paymentTerms: {},
-    
-    // Additional Scope
-    internalValueAddedScope: [],
-    marginedSubContractors: [],
-    zeroMarginedSupply: [],
-    ft2RateBUA: 0 // NEW: Add ft2RateBUA to formData
-  });
-
-  // Calculate proposal totals from formData
-  const proposalTotals = useMemo(() => {
-    const internalValueAdded = (Array.isArray(formData?.internalValueAddedScope) ? formData?.internalValueAddedScope : [])?.reduce((sum, item) => sum + (parseFloat(item?.productionCost) || 0), 0);
-    const marginedSubContractors = (Array.isArray(formData?.marginedSubContractors) ? formData?.marginedSubContractors : [])?.reduce((sum, item) => sum + (parseFloat(item?.totalCost) || 0), 0);
-    const zeroMarginedSupply = (Array.isArray(formData?.zeroMarginedSupply) ? formData?.zeroMarginedSupply : [])?.reduce((sum, item) => sum + (parseFloat(item?.totalCost) || 0), 0);
-    
-    // Calculate materials total
-    const modules = Array.isArray(formData?.modules) ? formData?.modules : [];
-    const totalAreaFt2 = modules?.reduce((sum, m) => {
-      const quantity = parseFloat(m?.quantity) || 0;
-      const areaFt2 = parseFloat(m?.areaFeet) || 0;
-      return sum + (quantity * areaFt2);
-    }, 0);
-    const materials = Array.isArray(formData?.materials) ? formData?.materials : [];
-    const costPerSqFtTotal = materials?.reduce((sum, item) => sum + (parseFloat(item?.costWastePSQF) || 0), 0);
-    let materialsTotal = costPerSqFtTotal * totalAreaFt2;
-    
-    // Calculate Labour Project Mod Total = (Labour Total ÷ smallestModuleAreaFt2) × totalAreaFt2
-    const labourRawTotal = (Array.isArray(formData?.labour) ? formData?.labour : [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
-    const categoryPriority = ['ppvc-module', 'floor-cassettes', 'roof-cassettes', 'roof-modules-flat', 'roof-module-pitched', 'roof-module-hybrid', 'panelized-module', 'kit-of-parts'];
-    let smallestModuleAreaFt2 = 0;
-    for (const category of categoryPriority) {
-      const categoryModules = modules?.filter(m => m?.category === category);
-      if (categoryModules?.length > 0) {
-        const smallestModule = categoryModules?.reduce((min, module) => {
-          const currentAreaFt2 = parseFloat(module?.areaFeet) || 0;
-          const minAreaFt2 = parseFloat(min?.areaFeet) || 0;
-          return currentAreaFt2 < minAreaFt2 ? module : min;
-        }, categoryModules?.[0]);
-        smallestModuleAreaFt2 = parseFloat(smallestModule?.areaFeet) || 0;
-        break;
-      }
-    }
-    const labourCostPSQF = smallestModuleAreaFt2 > 0 ? labourRawTotal / smallestModuleAreaFt2 : 0;
-    const labour = labourCostPSQF * totalAreaFt2;
-
-const overheadCalc = formData?.overheadCalculations || {};
-const totalOverHead = ['design', 'procurement', 'general', 'production', 'project']?.reduce((sum, section) => sum + (parseFloat(overheadCalc?.[section]?.totalOH) || 0), 0);
-    const siteCostsTotal = (Array.isArray(formData?.siteCosts) ? formData?.siteCosts : [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
-    const logisticsTotal = Array.isArray(formData?.logistics) && formData?.logistics?.length > 0 ? (parseFloat(formData?.logistics?.[0]?.totalLogistics) || 0) : 0;
-    const commission = (Array.isArray(formData?.commissionItems) ? formData?.commissionItems : [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
-    const finance = formData?.financing?.total || 0;
-    const risk = (Array.isArray(formData?.risks) ? formData?.risks : [])?.reduce((sum, item) => sum + (parseFloat(item?.cost) || 0), 0);
-    
-    const grandTotal = internalValueAdded + marginedSubContractors + zeroMarginedSupply + materialsTotal + labour + totalOverHead + siteCostsTotal + logisticsTotal + commission + finance + risk;
-    
-    return {
-      internalValueAdded,
-      marginedSubContractors,
-      zeroMarginedSupply,
-      materials: materialsTotal,
-      labour,
-      totalOverHead,
-      siteCostsTotal,
-      logisticsTotal,
-      commission,
-      finance,
-      risk,
-      grandTotal
-    };
-  }, [formData?.internalValueAddedScope, formData?.marginedSubContractors, formData?.zeroMarginedSupply, formData?.modules, formData?.materials, formData?.labour, formData?.overheadCalculations, formData?.siteCosts, formData?.logistics, formData?.commissionItems, formData?.financing, formData?.risks]);
-
   // Load existing proposal data if editing
   useEffect(() => {
     const abortController = new AbortController();
-    
+
     const loadProposalForEditing = async () => {
-      // CRITICAL FIX: Use getProposalId helper
-      const proposalId = getProposalId();
-      
+      // Use the stable ref for initial nav state to avoid re-triggering on getProposalId changes
+      const navState = initialNavStateRef?.current;
+      const proposalId = navState?.proposalId ||
+        sessionStorage.getItem('currentProposalId') ||
+        null;
+
+      // ── PREVIEW MODE: load snapshot from version history preview ──────────
+      const previewSnapshot = navState?.previewSnapshot;
+      const previewVersionNum = navState?.previewVersionNumber;
+      if (previewSnapshot && proposalId) {
+        console.log('[ProposalWorkspace] Loading PREVIEW snapshot for V', previewVersionNum);
+        setCurrentProposalId(proposalId);
+        sessionStorage.setItem('currentProposalId', proposalId);
+        const snap = previewSnapshot;
+        const loadedFormData = {
+          projectTitle: snap?.title || '',
+          proposalTitle: snap?.title || '',
+          clientId: snap?.client_id || '',
+          clientName: snap?.client?.company_name || '',
+          projectType: snap?.description || '',
+          startDate: snap?.start_date || '',
+          endDate: snap?.deadline || '',
+          baseCost: snap?.value || 0,
+          milestones: Array.isArray(snap?.milestones) ? snap?.milestones : [],
+          modules: Array.isArray(snap?.modules) ? snap?.modules : [],
+          marginPercentage: snap?.margin_percentage || 0,
+          materials: Array.isArray(snap?.materials) ? snap?.materials : [],
+          labour: Array.isArray(snap?.labour) ? snap?.labour : [],
+          estimationModel: snap?.estimation_model || 'single-module',
+          overheadCalculations: (snap?.overheads && !Array.isArray(snap?.overheads)) ? snap?.overheads : {},
+          siteCosts: Array.isArray(snap?.site_costs) ? snap?.site_costs : [],
+          logistics: Array.isArray(snap?.logistics) ? snap?.logistics : [],
+          commission: snap?.commission || 0,
+          commissionItems: Array.isArray(snap?.commission_items) ? snap?.commission_items : [],
+          revenueCenters: snap?.revenue_centers || { revenueType: 'chargeable', chargeableData: {}, marginPercentages: {}, totalMarginPercent: 0 },
+          financing: snap?.financing || {},
+          risks: Array.isArray(snap?.risks) ? snap?.risks : [],
+          paymentTerms: snap?.payment_terms || {},
+          internalValueAddedScope: Array.isArray(snap?.internal_value_added_scope) ? snap?.internal_value_added_scope : [],
+          marginedSubContractors: Array.isArray(snap?.margined_sub_contractors) ? snap?.margined_sub_contractors : [],
+          zeroMarginedSupply: Array.isArray(snap?.zero_margined_supply) ? snap?.zero_margined_supply : [],
+          projectName: snap?.project_details?.projectName || '',
+          clientType: snap?.project_details?.clientType || '',
+          country: snap?.project_details?.country || '',
+          state: snap?.project_details?.state || '',
+          city: snap?.project_details?.city || '',
+          projectAddress: snap?.project_details?.projectAddress || '',
+          targetBudgetPerSqft: snap?.project_details?.targetBudgetPerSqft || '',
+          estimatedAreaSqft: snap?.project_details?.estimatedAreaSqft || '',
+          scope: Array.isArray(snap?.project_details?.scope) ? snap?.project_details?.scope : [],
+          selectedMapLocation: snap?.project_details?.selectedMapLocation || null,
+          design: snap?.project_duration?.design || {},
+          procurement: snap?.project_duration?.procurement || {},
+          production: snap?.project_duration?.production || {},
+          ft2RateBUA: snap?.ft2_rate_bua || 0,
+        };
+        setFormData(loadedFormData);
+        setIsPreviewMode(true);
+        setPreviewVersionNumber(previewVersionNum);
+        setHasBeenSavedOnce(true);
+        setAutoSaveStatus('saved');
+        // Load latest version number for the header indicator
+        const { data: latestVersionNum } = await proposalService?.getLatestVersionNumber(proposalId);
+        if (latestVersionNum > 0) setCurrentVersionNumber(latestVersionNum);
+        setIsLoadingProposal(false);
+        setIsProposalLoaded(true);
+        return;
+      }
+
+      // ── RESTORE MODE: load restored snapshot ──────────────────────────────
+      const restoredSnapshot = navState?.restoredSnapshot;
+      const restoredVersionNum = navState?.restoredVersionNumber;
+      if (restoredSnapshot && proposalId) {
+        console.log('[ProposalWorkspace] Loading RESTORED snapshot for V', restoredVersionNum);
+        setCurrentProposalId(proposalId);
+        sessionStorage.setItem('currentProposalId', proposalId);
+        const snap = restoredSnapshot;
+        const loadedFormData = {
+          projectTitle: snap?.title || '',
+          proposalTitle: snap?.title || '',
+          clientId: snap?.client_id || '',
+          clientName: snap?.client?.company_name || '',
+          projectType: snap?.description || '',
+          startDate: snap?.start_date || '',
+          endDate: snap?.deadline || '',
+          baseCost: snap?.value || 0,
+          milestones: Array.isArray(snap?.milestones) ? snap?.milestones : [],
+          modules: Array.isArray(snap?.modules) ? snap?.modules : [],
+          marginPercentage: snap?.margin_percentage || 0,
+          materials: Array.isArray(snap?.materials) ? snap?.materials : [],
+          labour: Array.isArray(snap?.labour) ? snap?.labour : [],
+          estimationModel: snap?.estimation_model || 'single-module',
+          overheadCalculations: (snap?.overheads && !Array.isArray(snap?.overheads)) ? snap?.overheads : {},
+          siteCosts: Array.isArray(snap?.site_costs) ? snap?.site_costs : [],
+          logistics: Array.isArray(snap?.logistics) ? snap?.logistics : [],
+          commission: snap?.commission || 0,
+          commissionItems: Array.isArray(snap?.commission_items) ? snap?.commission_items : [],
+          revenueCenters: snap?.revenue_centers || { revenueType: 'chargeable', chargeableData: {}, marginPercentages: {}, totalMarginPercent: 0 },
+          financing: snap?.financing || {},
+          risks: Array.isArray(snap?.risks) ? snap?.risks : [],
+          paymentTerms: snap?.payment_terms || {},
+          internalValueAddedScope: Array.isArray(snap?.internal_value_added_scope) ? snap?.internal_value_added_scope : [],
+          marginedSubContractors: Array.isArray(snap?.margined_sub_contractors) ? snap?.margined_sub_contractors : [],
+          zeroMarginedSupply: Array.isArray(snap?.zero_margined_supply) ? snap?.zero_margined_supply : [],
+          projectName: snap?.project_details?.projectName || '',
+          clientType: snap?.project_details?.clientType || '',
+          country: snap?.project_details?.country || '',
+          state: snap?.project_details?.state || '',
+          city: snap?.project_details?.city || '',
+          projectAddress: snap?.project_details?.projectAddress || '',
+          targetBudgetPerSqft: snap?.project_details?.targetBudgetPerSqft || '',
+          estimatedAreaSqft: snap?.project_details?.estimatedAreaSqft || '',
+          scope: Array.isArray(snap?.project_details?.scope) ? snap?.project_details?.scope : [],
+          selectedMapLocation: snap?.project_details?.selectedMapLocation || null,
+          design: snap?.project_duration?.design || {},
+          procurement: snap?.project_duration?.procurement || {},
+          production: snap?.project_duration?.production || {},
+          ft2RateBUA: snap?.ft2_rate_bua || 0,
+        };
+        setFormData(loadedFormData);
+        setIsPreviewMode(false);
+        setPreviewVersionNumber(null);
+        setHasBeenSavedOnce(true);
+        setAutoSaveStatus('unsaved'); // Mark unsaved so user knows to save the restored state
+        // Load latest version number
+        const { data: latestVersionNum } = await proposalService?.getLatestVersionNumber(proposalId);
+        if (latestVersionNum > 0) setCurrentVersionNumber(latestVersionNum);
+        setIsLoadingProposal(false);
+        setIsProposalLoaded(true);
+        addToast({ type: 'info', title: 'Version Restored', message: `V${restoredVersionNum} snapshot loaded. Save to apply changes.` });
+        return;
+      }
+
+      // ── NORMAL LOAD: fetch from database ──────────────────────────────────
       if (proposalId) {
         setIsLoadingProposal(true);
         try {
@@ -297,23 +366,24 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
             // Pre-populate form data with existing proposal data
             const loadedFormData = {
               projectTitle: proposalData?.title || '',
+              proposalTitle: proposalData?.title || '',
               clientId: proposalData?.client_id || '',
               clientName: proposalData?.client?.company_name || '',
               projectType: proposalData?.description || '',
               startDate: proposalData?.start_date || '',
               endDate: proposalData?.deadline || '',
               baseCost: proposalData?.value || 0,
-              milestones: proposalData?.milestones || [],
-              modules: proposalData?.modules || [],
+              milestones: Array.isArray(proposalData?.milestones) ? proposalData?.milestones : [],
+              modules: Array.isArray(proposalData?.modules) ? proposalData?.modules : [],
               marginPercentage: proposalData?.margin_percentage || 0,
-              materials: proposalData?.materials || [],
-              labour: proposalData?.labour || [],
-              estimationModel: proposalData?.estimation_model || 'single-module', // Restore estimation model
-              overheadCalculations: proposalData?.overheads || {},
-              siteCosts: proposalData?.site_costs || [],
-              logistics: proposalData?.logistics || [],
+              materials: Array.isArray(proposalData?.materials) ? proposalData?.materials : [],
+              labour: Array.isArray(proposalData?.labour) ? proposalData?.labour : [],
+              estimationModel: proposalData?.estimation_model || 'single-module',
+              overheadCalculations: (proposalData?.overheads && !Array.isArray(proposalData?.overheads)) ? proposalData?.overheads : {},
+              siteCosts: Array.isArray(proposalData?.site_costs) ? proposalData?.site_costs : [],
+              logistics: Array.isArray(proposalData?.logistics) ? proposalData?.logistics : [],
               commission: proposalData?.commission || 0,
-              commissionItems: proposalData?.commission_items || [],
+              commissionItems: Array.isArray(proposalData?.commission_items) ? proposalData?.commission_items : [],
               revenueCenters: proposalData?.revenue_centers || {
                 revenueType: 'chargeable',
                 chargeableData: {},
@@ -321,12 +391,12 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
                 totalMarginPercent: 0
               },
               financing: proposalData?.financing || {},
-              risks: proposalData?.risks || [],
+              risks: Array.isArray(proposalData?.risks) ? proposalData?.risks : [],
               paymentTerms: proposalData?.payment_terms || {},
               // Additional Scope fields
-              internalValueAddedScope: proposalData?.internal_value_added_scope || [],
-              marginedSubContractors: proposalData?.margined_sub_contractors || [],
-              zeroMarginedSupply: proposalData?.zero_margined_supply || [],
+              internalValueAddedScope: Array.isArray(proposalData?.internal_value_added_scope) ? proposalData?.internal_value_added_scope : [],
+              marginedSubContractors: Array.isArray(proposalData?.margined_sub_contractors) ? proposalData?.margined_sub_contractors : [],
+              zeroMarginedSupply: Array.isArray(proposalData?.zero_margined_supply) ? proposalData?.zero_margined_supply : [],
               // Project Details fields
               projectName: proposalData?.project_details?.projectName || '',
               clientType: proposalData?.project_details?.clientType || '',
@@ -336,20 +406,29 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
               projectAddress: proposalData?.project_details?.projectAddress || '',
               targetBudgetPerSqft: proposalData?.project_details?.targetBudgetPerSqft || '',
               estimatedAreaSqft: proposalData?.project_details?.estimatedAreaSqft || '',
-              scope: proposalData?.project_details?.scope || [],
+              scope: Array.isArray(proposalData?.project_details?.scope) ? proposalData?.project_details?.scope : [],
               selectedMapLocation: proposalData?.project_details?.selectedMapLocation || null,
               // Project Duration fields
               design: proposalData?.project_duration?.design || {},
               procurement: proposalData?.project_duration?.procurement || {},
-              production: proposalData?.project_duration?.production || {}
+              production: proposalData?.project_duration?.production || {},
+              ft2RateBUA: proposalData?.ft2_rate_bua || 0,
             };
             
             setFormData(loadedFormData);
+            setIsPreviewMode(false);
+            setPreviewVersionNumber(null);
             
             // Mark as already saved since we're editing existing proposal
             setHasBeenSavedOnce(true);
             setAutoSaveStatus('saved');
             setLastSaved(new Date(proposalData?.updated_at || proposalData?.created_at));
+
+            // Load latest version number
+            const { data: latestVersionNum } = await proposalService?.getLatestVersionNumber(proposalId);
+            if (latestVersionNum > 0) {
+              setCurrentVersionNumber(latestVersionNum);
+            }
           }
         } catch (error) {
           // Ignore abort errors - they're expected when component unmounts
@@ -361,6 +440,7 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
         } finally {
           if (!abortController?.signal?.aborted) {
             setIsLoadingProposal(false);
+            setIsProposalLoaded(true);
           }
         }
       }
@@ -372,7 +452,89 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
     return () => {
       abortController?.abort();
     };
-  }, [location?.state?.proposalId, getProposalId]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // ^ Run only once on mount using the stable initialNavStateRef.
+  // getProposalId is intentionally excluded to prevent re-triggering the load
+  // when currentProposalId state updates after the initial load.
+
+  // ── PREVIEW NAVIGATION EFFECT ─────────────────────────────────────────────
+  // Watches location.state for previewSnapshot changes so that when the user
+  // navigates back to the already-mounted workspace from the version history
+  // panel, the snapshot is loaded into formData and preview mode is activated.
+  // This is separate from the initial load useEffect (which runs once on mount)
+  // so it doesn't interfere with the normal load flow.
+  useEffect(() => {
+    const previewSnapshot = location?.state?.previewSnapshot;
+    const previewVersionNum = location?.state?.previewVersionNumber;
+    const proposalId = location?.state?.proposalId ||
+      currentProposalId ||
+      sessionStorage.getItem('currentProposalId');
+
+    if (!previewSnapshot || !proposalId) return;
+
+    console.log('[ProposalWorkspace] Preview navigation detected for V', previewVersionNum);
+
+    const snap = previewSnapshot;
+    const loadedFormData = {
+      projectTitle: snap?.title || '',
+      proposalTitle: snap?.title || '',
+      clientId: snap?.client_id || '',
+      clientName: snap?.client?.company_name || '',
+      projectType: snap?.description || '',
+      startDate: snap?.start_date || '',
+      endDate: snap?.deadline || '',
+      baseCost: snap?.value || 0,
+      milestones: Array.isArray(snap?.milestones) ? snap?.milestones : [],
+      modules: Array.isArray(snap?.modules) ? snap?.modules : [],
+      marginPercentage: snap?.margin_percentage || 0,
+      materials: Array.isArray(snap?.materials) ? snap?.materials : [],
+      labour: Array.isArray(snap?.labour) ? snap?.labour : [],
+      estimationModel: snap?.estimation_model || 'single-module',
+      overheadCalculations: (snap?.overheads && !Array.isArray(snap?.overheads)) ? snap?.overheads : {},
+      siteCosts: Array.isArray(snap?.site_costs) ? snap?.site_costs : [],
+      logistics: Array.isArray(snap?.logistics) ? snap?.logistics : [],
+      commission: snap?.commission || 0,
+      commissionItems: Array.isArray(snap?.commission_items) ? snap?.commission_items : [],
+      revenueCenters: snap?.revenue_centers || { revenueType: 'chargeable', chargeableData: {}, marginPercentages: {}, totalMarginPercent: 0 },
+      financing: snap?.financing || {},
+      risks: Array.isArray(snap?.risks) ? snap?.risks : [],
+      paymentTerms: snap?.payment_terms || {},
+      internalValueAddedScope: Array.isArray(snap?.internal_value_added_scope) ? snap?.internal_value_added_scope : [],
+      marginedSubContractors: Array.isArray(snap?.margined_sub_contractors) ? snap?.margined_sub_contractors : [],
+      zeroMarginedSupply: Array.isArray(snap?.zero_margined_supply) ? snap?.zero_margined_supply : [],
+      projectName: snap?.project_details?.projectName || '',
+      clientType: snap?.project_details?.clientType || '',
+      country: snap?.project_details?.country || '',
+      state: snap?.project_details?.state || '',
+      city: snap?.project_details?.city || '',
+      projectAddress: snap?.project_details?.projectAddress || '',
+      targetBudgetPerSqft: snap?.project_details?.targetBudgetPerSqft || '',
+      estimatedAreaSqft: snap?.project_details?.estimatedAreaSqft || '',
+      scope: Array.isArray(snap?.project_details?.scope) ? snap?.project_details?.scope : [],
+      selectedMapLocation: snap?.project_details?.selectedMapLocation || null,
+      design: snap?.project_duration?.design || {},
+      procurement: snap?.project_duration?.procurement || {},
+      production: snap?.project_duration?.production || {},
+      ft2RateBUA: snap?.ft2_rate_bua || 0,
+    };
+
+    setCurrentProposalId(proposalId);
+    sessionStorage.setItem('currentProposalId', proposalId);
+    setFormData(loadedFormData);
+    setIsPreviewMode(true);
+    setPreviewVersionNumber(previewVersionNum);
+    setHasBeenSavedOnce(true);
+    setAutoSaveStatus('saved');
+    setIsLoadingProposal(false);
+    setIsProposalLoaded(true);
+
+    // Fetch latest version number for the header indicator
+    proposalService?.getLatestVersionNumber(proposalId)?.then(({ data: latestVersionNum }) => {
+      if (latestVersionNum > 0) setCurrentVersionNumber(latestVersionNum);
+    });
+  }, [location?.state?.previewSnapshot, location?.state?.previewVersionNumber]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ^ Only re-runs when previewSnapshot in navigation state changes.
+  // currentProposalId intentionally excluded to avoid re-triggering on state updates.
 
   // Handle navigation with beforeunload event
   useEffect(() => {
@@ -409,18 +571,18 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
   const calculateProgress = useCallback(() => {
     const totalFields = 14;
     let filledFields = 0;
-    if (formData?.projectTitle) filledFields++;
+    if (formData?.proposalTitle || formData?.projectTitle) filledFields++;
     if (formData?.clientName) filledFields++;
     if (formData?.projectType) filledFields++;
     if (formData?.startDate && formData?.endDate) filledFields++;
     if (formData?.modules?.length > 0) filledFields++;
     if (formData?.baseCost > 0) filledFields++;
     if (formData?.materials?.length > 0 || formData?.labour?.length > 0) filledFields++;
-    if (formData?.overheads?.length > 0) filledFields++;
+    if (formData?.overheadCalculations && Object.keys(formData?.overheadCalculations)?.length > 0) filledFields++;
     if (formData?.siteCosts?.length > 0) filledFields++;
     if (formData?.logistics?.length > 0) filledFields++;
     if (formData?.commission > 0) filledFields++;
-    if (formData?.revenueCenters?.length > 0) filledFields++;
+    if (formData?.revenueCenters && typeof formData?.revenueCenters === 'object' && !Array.isArray(formData?.revenueCenters)) filledFields++;
     if (formData?.financing && Object.keys(formData?.financing)?.length > 0) filledFields++;
     if (formData?.risks?.length > 0) filledFields++;
     return Math.round((filledFields / totalFields) * 100);
@@ -445,37 +607,44 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
       return;
     }
 
+    // Guard: skip if a save is already in progress to prevent concurrent saves
+    // Read autoSaveStatus from ref to avoid stale closure
+    if (autoSaveStatusRef?.current === 'saving') {
+      console.warn('[AutoSave] Skipping — save already in progress');
+      return;
+    }
+
+    // CRITICAL FIX: Read from ref to get latest formData (avoids stale closure)
+    const currentFormData = formDataRef?.current;
+
     try {
       setAutoSaveStatus('saving');
       const { data: updatedProposal, error } = await proposalService?.updateProposal(proposalIdToUse, {
-        title: formData?.projectTitle || 'Untitled Proposal',
-        projectName: formData?.projectTitle || 'Untitled Proposal',
-        description: formData?.projectType || '',
+        title: currentFormData?.proposalTitle || currentFormData?.projectTitle || 'Untitled Proposal',
+        projectName: currentFormData?.proposalTitle || currentFormData?.projectTitle || 'Untitled Proposal',
+        description: currentFormData?.projectType || '',
         value: calculateChargeableValue() ?? 0,
         estimatedTotalBudget: calculateChargeableValue() ?? 0,
         progress: calculateProgress() ?? 0,
-        deadline: formData?.endDate || null,
-        startDate: formData?.startDate || null,
+        deadline: currentFormData?.endDate || null,
+        startDate: currentFormData?.startDate || null,
         status: 'Draft',
-        clientId: formData?.clientId || null,
+        clientId: currentFormData?.clientId || null,
         // Detailed proposal data - CRITICAL: Include all fields to prevent data loss
-        modules: formData?.modules || [],
-        milestones: formData?.milestones || [],
-        materials: formData?.materials || [],
-        labour: formData?.labour || [],
-        estimationModel: formData?.estimationModel || 'single-module', // Save estimation model
-        overheads: formData?.overheadCalculations || {},
-        siteCosts: formData?.siteCosts || [],
-        logistics: formData?.logistics || [],
-        commission: formData?.commission || 0,
-        commissionItems: formData?.commissionItems || [],
-        marginPercentage: formData?.marginPercentage || 0,
+        modules: currentFormData?.modules || [],
+        milestones: currentFormData?.milestones || [],
+        materials: currentFormData?.materials || [],
+        labour: currentFormData?.labour || [],
+        estimationModel: currentFormData?.estimationModel || 'single-module',
+        overheads: currentFormData?.overheadCalculations || {},
+        siteCosts: currentFormData?.siteCosts || [],
+        logistics: currentFormData?.logistics || [],
+        commission: currentFormData?.commission || 0,
+        commissionItems: currentFormData?.commissionItems || [],
+        marginPercentage: currentFormData?.marginPercentage || 0,
         revenueCenters: (() => {
-          const rc = formData?.revenueCenters;
-          // CRITICAL FIX: Ensure revenueCenters is always an object, never an array
-          if (rc && typeof rc === 'object' && !Array.isArray(rc)) {
-            return rc;
-          }
+          const rc = currentFormData?.revenueCenters;
+          if (rc && typeof rc === 'object' && !Array.isArray(rc)) return rc;
           return {
             revenueType: 'chargeable',
             chargeableData: {},
@@ -483,41 +652,38 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
             totalMarginPercent: 0
           };
         })(),
-        financing: formData?.financing || {},
-        risks: formData?.risks || [],
-        paymentTerms: formData?.paymentTerms || {},
-        // Additional Scope data
-        internalValueAddedScope: formData?.internalValueAddedScope || [],
-        marginedSubContractors: formData?.marginedSubContractors || [],
-        zeroMarginedSupply: formData?.zeroMarginedSupply || [],
-        // Project Details data
+        financing: currentFormData?.financing || {},
+        risks: currentFormData?.risks || [],
+        paymentTerms: currentFormData?.paymentTerms || {},
+        internalValueAddedScope: currentFormData?.internalValueAddedScope || [],
+        marginedSubContractors: currentFormData?.marginedSubContractors || [],
+        zeroMarginedSupply: currentFormData?.zeroMarginedSupply || [],
         projectDetails: {
-          clientId: formData?.clientId || '',
-          projectName: formData?.projectName || '',
-          projectType: formData?.projectType || '',
-          clientType: formData?.clientType || '',
-          country: formData?.country || '',
-          state: formData?.state || '',
-          city: formData?.city || '',
-          projectAddress: formData?.projectAddress || '',
-          targetBudgetPerSqft: formData?.targetBudgetPerSqft || '',
-          estimatedAreaSqft: formData?.estimatedAreaSqft || '',
-          scope: formData?.scope || [],
-          selectedMapLocation: formData?.selectedMapLocation || null
+          clientId: currentFormData?.clientId || '',
+          projectName: currentFormData?.projectName || '',
+          projectType: currentFormData?.projectType || '',
+          clientType: currentFormData?.clientType || '',
+          country: currentFormData?.country || '',
+          state: currentFormData?.state || '',
+          city: currentFormData?.city || '',
+          projectAddress: currentFormData?.projectAddress || '',
+          targetBudgetPerSqft: currentFormData?.targetBudgetPerSqft || '',
+          estimatedAreaSqft: currentFormData?.estimatedAreaSqft || '',
+          scope: currentFormData?.scope || [],
+          selectedMapLocation: currentFormData?.selectedMapLocation || null
         },
-        // Project Duration data
         projectDuration: {
-          design: formData?.design || {},
-          procurement: formData?.procurement || {},
-          production: formData?.production || {}
-        }
+          design: currentFormData?.design || {},
+          procurement: currentFormData?.procurement || {},
+          production: currentFormData?.production || {}
+        },
+        ft2RateBUA: currentFormData?.ft2RateBUA || 0,
       });
       
       if (error) {
         throw error;
       }
       
-      // CRITICAL FIX: Ensure currentProposalId and sessionStorage are set
       if (!currentProposalId && proposalIdToUse) {
         setCurrentProposalId(proposalIdToUse);
         sessionStorage.setItem('currentProposalId', proposalIdToUse);
@@ -528,34 +694,53 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
     } catch (error) {
       console.error('Auto-save failed:', error);
       setAutoSaveStatus('unsaved');
-      addToast({
-        type: 'error',
-        title: 'Auto-save Failed',
-        message: error?.message || 'Failed to auto-save proposal. Please save manually.',
-      });
+      // Only show error toast for non-transient errors (not network blips)
+      const isTransientNetworkError =
+        error?.message?.toLowerCase()?.includes('failed to fetch') ||
+        error?.message?.toLowerCase()?.includes('network error') ||
+        error?.message?.toLowerCase()?.includes('fetch') ||
+        error?.name === 'TypeError';
+      if (!isTransientNetworkError) {
+        addToast({
+          type: 'error',
+          title: 'Auto-save Failed',
+          message: error?.message || 'Failed to auto-save proposal. Please save manually.',
+        });
+      }
     }
-  }, [getProposalId, formData, currentProposalId, addToast, calculateChargeableValue, calculateProgress]);
+  }, [getProposalId, currentProposalId, addToast, calculateChargeableValue, calculateProgress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save functionality - starts after first manual save
+  // CRITICAL FIX: Use a ref to store the latest handleAutoSave so the timer effect
+  // doesn't need handleAutoSave in its dependency array (which would reset the timer on every change)
+  const handleAutoSaveRef = useRef(handleAutoSave);
   useEffect(() => {
-    if (hasBeenSavedOnce && autoSaveStatus === 'unsaved') {
-      // Clear existing timer
-      if (autoSaveTimerRef?.current) {
-        clearTimeout(autoSaveTimerRef?.current);
-      }
+    handleAutoSaveRef.current = handleAutoSave;
+  }, [handleAutoSave]);
 
-      // Set new timer for 60 seconds
-      autoSaveTimerRef.current = setTimeout(() => {
-        handleAutoSave();
-      }, 60000); // 60 seconds
+  useEffect(() => {
+    if (!hasBeenSavedOnce) return;
+    if (autoSaveStatus !== 'unsaved') return;
+
+    // Clear existing timer
+    if (autoSaveTimerRef?.current) {
+      clearTimeout(autoSaveTimerRef?.current);
     }
+
+    // Set new timer for 30 seconds (reduced from 60s for better UX)
+    autoSaveTimerRef.current = setTimeout(() => {
+      handleAutoSaveRef?.current();
+    }, 30000);
 
     return () => {
       if (autoSaveTimerRef?.current) {
         clearTimeout(autoSaveTimerRef?.current);
       }
     };
-  }, [formData, hasBeenSavedOnce, autoSaveStatus, handleAutoSave]);
+  }, [formData, hasBeenSavedOnce, autoSaveStatus]);
+  // ^ formData in deps is intentional: we want the timer to reset when data changes,
+  // but handleAutoSave is NOT in deps (accessed via ref) so the timer doesn't reset
+  // due to callback recreation — only due to actual data changes.
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -589,13 +774,26 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
       
       // Mark as unsaved to trigger auto-save
       setAutoSaveStatus('unsaved');
-      
-      return {
-        ...prev,
-        [field]: value
-      };
+
+      let nextState;
+      // CRITICAL FIX: Keep proposalTitle and projectTitle in sync
+      // Some tabs write to 'projectTitle', save functions read 'proposalTitle' — keep both identical
+      if (field === 'projectTitle') {
+        nextState = { ...prev, projectTitle: value, proposalTitle: value };
+      } else if (field === 'proposalTitle') {
+        nextState = { ...prev, proposalTitle: value, projectTitle: value };
+      } else {
+        nextState = { ...prev, [field]: value };
+      }
+
+      // FIX: Sync formDataRef synchronously so handleManualSave always reads
+      // the latest value even if the React re-render hasn't flushed yet.
+      // This is critical for OverHeadsTab which calls onChange just before Save.
+      formDataRef.current = nextState;
+
+      return nextState;
     });
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Add this block - handleChange function that wraps handleFormChange
   const handleChange = useCallback((field, value) => {
@@ -610,8 +808,12 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
     // Prevent save while loading
     if (isLoadingProposal) {
       console.warn('Cannot save while proposal is loading');
+      addToast({ type: 'warning', title: 'Please Wait', message: 'Proposal is still loading. Please wait a moment and try again.' });
       return;
     }
+
+    // CRITICAL FIX: Read from ref to get latest formData (avoids stale closure / timing issue)
+    const currentFormData = formDataRef?.current;
 
     try {
       setAutoSaveStatus('saving');
@@ -623,87 +825,81 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
 
       // Check if any meaningful data has been entered
       const hasData = 
-        formData?.projectName || 
-        formData?.clientId || 
-        formData?.projectType ||
-        formData?.country ||
-        formData?.city ||
-        formData?.modules?.length > 0 ||
-        formData?.materials?.length > 0 ||
-        formData?.logistics?.length > 0 ||
-        formData?.commissionItems?.length > 0;
+        currentFormData?.projectName || 
+        currentFormData?.proposalTitle ||
+        currentFormData?.projectTitle ||
+        currentFormData?.clientId || 
+        currentFormData?.projectType ||
+        currentFormData?.country ||
+        currentFormData?.city ||
+        currentFormData?.modules?.length > 0 ||
+        currentFormData?.materials?.length > 0 ||
+        currentFormData?.logistics?.length > 0 ||
+        currentFormData?.commissionItems?.length > 0;
 
       // Log for debugging - don't prevent save
       if (!hasData) {
         console.warn('Saving proposal with minimal data');
       }
 
+      // CRITICAL FIX: Resolve title from proposalTitle OR projectTitle (whichever is set)
+      const resolvedTitle = currentFormData?.proposalTitle || currentFormData?.projectTitle || 'Untitled Proposal';
+
       const saveData = {
         proposalId: proposalIdToUse,
         data: {
-          title: formData?.projectTitle || 'Untitled Proposal',
-          projectName: formData?.projectTitle || 'Untitled Proposal',
-          description: formData?.projectType || '',
+          title: resolvedTitle,
+          projectName: resolvedTitle,
+          description: currentFormData?.projectType || '',
           value: calculateChargeableValue() ?? 0,
           estimatedTotalBudget: calculateChargeableValue() ?? 0,
           progress: calculateProgress() ?? 0,
-          deadline: formData?.endDate || null,
-          startDate: formData?.startDate || null,
+          deadline: currentFormData?.endDate || null,
+          startDate: currentFormData?.startDate || null,
           status: 'Draft',
-          clientId: formData?.clientId || null,
-          ft2RateBUA: formData?.ft2RateBUA || 0,
+          clientId: currentFormData?.clientId || null,
+          ft2RateBUA: currentFormData?.ft2RateBUA || 0,
           // Detailed proposal data
-          modules: formData?.modules || [],
-          milestones: formData?.milestones || [],
-          materials: formData?.materials || [],
-          labour: formData?.labour || [],
-          estimationModel: formData?.estimationModel || 'single-module', // Save estimation model
-          overheads: formData?.overheadCalculations || {},
-          siteCosts: formData?.siteCosts || [],
-          logistics: formData?.logistics || [],
-          commission: formData?.commission || 0,
-          commissionItems: formData?.commissionItems || [],
-          marginPercentage: formData?.marginPercentage || 0,
+          modules: currentFormData?.modules || [],
+          milestones: currentFormData?.milestones || [],
+          materials: currentFormData?.materials || [],
+          labour: currentFormData?.labour || [],
+          estimationModel: currentFormData?.estimationModel || 'single-module',
+          overheads: currentFormData?.overheadCalculations || {},
+          siteCosts: currentFormData?.siteCosts || [],
+          logistics: currentFormData?.logistics || [],
+          commission: currentFormData?.commission || 0,
+          commissionItems: currentFormData?.commissionItems || [],
+          marginPercentage: currentFormData?.marginPercentage || 0,
           revenueCenters: (() => {
-            const rc = formData?.revenueCenters;
-            // CRITICAL FIX: Ensure revenueCenters is always an object, never an array
-            if (rc && typeof rc === 'object' && !Array.isArray(rc)) {
-              return rc;
-            }
-            return {
-              revenueType: 'chargeable',
-              chargeableData: {},
-              marginPercentages: {},
-              totalMarginPercent: 0
-            };
+            const rc = currentFormData?.revenueCenters;
+            if (rc && typeof rc === 'object' && !Array.isArray(rc)) return rc;
+            return { revenueType: 'chargeable', chargeableData: {}, marginPercentages: {}, totalMarginPercent: 0 };
           })(),
-          financing: formData?.financing || {},
-          risks: formData?.risks || [],
-          paymentTerms: formData?.paymentTerms || {},
-          // Additional Scope data
-          internalValueAddedScope: formData?.internalValueAddedScope || [],
-          marginedSubContractors: formData?.marginedSubContractors || [],
-          zeroMarginedSupply: formData?.zeroMarginedSupply || [],
-          // Project Details data
+          financing: currentFormData?.financing || {},
+          risks: currentFormData?.risks || [],
+          paymentTerms: currentFormData?.paymentTerms || {},
+          internalValueAddedScope: currentFormData?.internalValueAddedScope || [],
+          marginedSubContractors: currentFormData?.marginedSubContractors || [],
+          zeroMarginedSupply: currentFormData?.zeroMarginedSupply || [],
           projectDetails: {
-            clientId: formData?.clientId || '',
-            projectName: formData?.projectName || '',
-            projectType: formData?.projectType || '',
-            clientType: formData?.clientType || '',
-            country: formData?.country || '',
-            state: formData?.state || '',
-            city: formData?.city || '',
-            projectAddress: formData?.projectAddress || '',
-            targetBudgetPerSqft: formData?.targetBudgetPerSqft || '',
-            estimatedAreaSqft: formData?.estimatedAreaSqft || '',
-            scope: formData?.scope || [],
-            selectedMapLocation: formData?.selectedMapLocation || null
+            clientId: currentFormData?.clientId || '',
+            projectName: currentFormData?.projectName || '',
+            projectType: currentFormData?.projectType || '',
+            clientType: currentFormData?.clientType || '',
+            country: currentFormData?.country || '',
+            state: currentFormData?.state || '',
+            city: currentFormData?.city || '',
+            projectAddress: currentFormData?.projectAddress || '',
+            targetBudgetPerSqft: currentFormData?.targetBudgetPerSqft || '',
+            estimatedAreaSqft: currentFormData?.estimatedAreaSqft || '',
+            scope: currentFormData?.scope || [],
+            selectedMapLocation: currentFormData?.selectedMapLocation || null
           },
-          // Project Duration data
           projectDuration: {
-            design: formData?.design || {},
-            procurement: formData?.procurement || {},
-            production: formData?.production || {}
+            design: currentFormData?.design || {},
+            procurement: currentFormData?.procurement || {},
+            production: currentFormData?.production || {}
           }
         }
       };
@@ -712,23 +908,18 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
         // Use saveQueue if enabled, otherwise direct save
         if (SAVE_QUEUE_ENABLED) {
           await saveQueue?.enqueueSave(saveData, {
-            priority: 'high', // Manual saves get high priority
+            priority: 'high',
             onSuccess: () => {
               if (isMountedRef?.current) {
                 clearTimeout(saveTimeoutRef?.current);
                 setAutoSaveStatus('saved');
                 setLastSaved(new Date());
                 setHasBeenSavedOnce(true);
-                // CRITICAL FIX: Ensure currentProposalId and sessionStorage are set
                 if (!currentProposalId && proposalIdToUse) {
                   setCurrentProposalId(proposalIdToUse);
                   sessionStorage.setItem('currentProposalId', proposalIdToUse);
                 }
-                addToast({
-                  type: 'success',
-                  title: 'Proposal Saved',
-                  message: 'Your proposal has been saved successfully.',
-                });
+                addToast({ type: 'success', title: 'Proposal Saved', message: 'Your proposal has been saved successfully.' });
               }
             },
             onError: (error) => {
@@ -736,11 +927,7 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
                 clearTimeout(saveTimeoutRef?.current);
                 console.error('Manual save failed:', error);
                 setAutoSaveStatus('error');
-                addToast({
-                  type: 'error',
-                  title: 'Manual Save Failed',
-                  message: error?.message || 'Failed to save proposal manually.',
-                });
+                addToast({ type: 'error', title: 'Manual Save Failed', message: error?.message || 'Failed to save proposal manually.' });
               }
             }
           });
@@ -749,7 +936,12 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
           const { data: updatedProposal, error } = await proposalService?.updateProposal(proposalIdToUse, saveData?.data);
           
           if (error) {
-            throw error;
+            // Treat "no rows affected" as a soft warning, not a fatal throw
+            if (error?.message?.includes('no rows affected')) {
+              console.warn('[directSave] No rows affected — proposal may not exist or RLS blocked update:', error?.message);
+            } else {
+              throw error;
+            }
           }
           
           if (isMountedRef?.current) {
@@ -757,108 +949,103 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
             setAutoSaveStatus('saved');
             setLastSaved(new Date());
             setHasBeenSavedOnce(true);
-            // CRITICAL FIX: Ensure currentProposalId and sessionStorage are set
             if (!currentProposalId && proposalIdToUse) {
               setCurrentProposalId(proposalIdToUse);
               sessionStorage.setItem('currentProposalId', proposalIdToUse);
             }
-            addToast({
-              type: 'success',
-              title: 'Proposal Saved',
-              message: 'Your proposal has been saved successfully.',
-            });
+            addToast({ type: 'success', title: 'Proposal Saved', message: 'Your proposal has been saved successfully.' });
           }
         }
       } else {
         // Create new proposal
         const newProposal = await proposalService?.createProposal({
-          title: formData?.projectTitle || 'Untitled Proposal',
-          projectName: formData?.projectTitle || 'Untitled Proposal',
-          description: formData?.projectType || '',
+          title: resolvedTitle,
+          projectName: resolvedTitle,
+          description: currentFormData?.projectType || '',
           value: calculateChargeableValue() ?? 0,
           estimatedTotalBudget: calculateChargeableValue() ?? 0,
           progress: calculateProgress() ?? 0,
-          deadline: formData?.endDate || null,
-          startDate: formData?.startDate || null,
+          deadline: currentFormData?.endDate || null,
+          startDate: currentFormData?.startDate || null,
           status: 'Draft',
-          clientId: formData?.clientId || null,
-          ft2RateBUA: formData?.ft2RateBUA || 0,
+          clientId: currentFormData?.clientId || null,
+          ft2RateBUA: currentFormData?.ft2RateBUA || 0,
           // Detailed proposal data
-          modules: formData?.modules || [],
-          milestones: formData?.milestones || [],
-          materials: formData?.materials || [],
-          labour: formData?.labour || [],
-          estimationModel: formData?.estimationModel || 'single-module', // Save estimation model
-          overheads: formData?.overheadCalculations || {},
-          siteCosts: formData?.siteCosts || [],
-          logistics: formData?.logistics || [],
-          commission: formData?.commission || 0,
-          commissionItems: formData?.commissionItems || [],
-          marginPercentage: formData?.marginPercentage || 0,
-          revenueCenters: formData?.revenueCenters || [],
-          financing: formData?.financing || {},
-          risks: formData?.risks || [],
-          paymentTerms: formData?.paymentTerms || {},
+          modules: currentFormData?.modules || [],
+          milestones: currentFormData?.milestones || [],
+          materials: currentFormData?.materials || [],
+          labour: currentFormData?.labour || [],
+          estimationModel: currentFormData?.estimationModel || 'single-module',
+          overheads: currentFormData?.overheadCalculations || {},
+          siteCosts: currentFormData?.siteCosts || [],
+          logistics: currentFormData?.logistics || [],
+          commission: currentFormData?.commission || 0,
+          commissionItems: currentFormData?.commissionItems || [],
+          marginPercentage: currentFormData?.marginPercentage || 0,
+          revenueCenters: (() => {
+            const rc = currentFormData?.revenueCenters;
+            if (rc && typeof rc === 'object' && !Array.isArray(rc)) return rc;
+            return { revenueType: 'chargeable', chargeableData: {}, marginPercentages: {}, totalMarginPercent: 0 };
+          })(),
+          financing: currentFormData?.financing || {},
+          risks: currentFormData?.risks || [],
+          paymentTerms: currentFormData?.paymentTerms || {},
           // Additional Scope data
-          internalValueAddedScope: formData?.internalValueAddedScope || [],
-          marginedSubContractors: formData?.marginedSubContractors || [],
-          zeroMarginedSupply: formData?.zeroMarginedSupply || [],
+          internalValueAddedScope: currentFormData?.internalValueAddedScope || [],
+          marginedSubContractors: currentFormData?.marginedSubContractors || [],
+          zeroMarginedSupply: currentFormData?.zeroMarginedSupply || [],
           // Project Details data
           projectDetails: {
-            clientId: formData?.clientId || '',
-            projectName: formData?.projectName || '',
-            projectType: formData?.projectType || '',
-            clientType: formData?.clientType || '',
-            country: formData?.country || '',
-            state: formData?.state || '',
-            city: formData?.city || '',
-            projectAddress: formData?.projectAddress || '',
-            targetBudgetPerSqft: formData?.targetBudgetPerSqft || '',
-            estimatedAreaSqft: formData?.estimatedAreaSqft || '',
-            scope: formData?.scope || [],
-            selectedMapLocation: formData?.selectedMapLocation || null
+            clientId: currentFormData?.clientId || '',
+            projectName: currentFormData?.projectName || '',
+            projectType: currentFormData?.projectType || '',
+            clientType: currentFormData?.clientType || '',
+            country: currentFormData?.country || '',
+            state: currentFormData?.state || '',
+            city: currentFormData?.city || '',
+            projectAddress: currentFormData?.projectAddress || '',
+            targetBudgetPerSqft: currentFormData?.targetBudgetPerSqft || '',
+            estimatedAreaSqft: currentFormData?.estimatedAreaSqft || '',
+            scope: currentFormData?.scope || [],
+            selectedMapLocation: currentFormData?.selectedMapLocation || null
           },
           // Project Duration data
           projectDuration: {
-            design: formData?.design || {},
-            procurement: formData?.procurement || {},
-            production: formData?.production || {}
+            design: currentFormData?.design || {},
+            procurement: currentFormData?.procurement || {},
+            production: currentFormData?.production || {}
           }
         });
         
-        // CRITICAL FIX: Set proposal ID after creation
         if (isMountedRef?.current && newProposal?.id) {
           setCurrentProposalId(newProposal?.id);
           sessionStorage.setItem('currentProposalId', newProposal?.id);
           console.log('New proposal created with ID:', newProposal?.id);
         } else if (!newProposal?.id) {
+          console.error('createProposal returned no ID. newProposal value:', newProposal);
           throw new Error('Proposal could not be created. Please check your connection and try again.');
         }
       }
 
-      // CRITICAL FIX: Only update status if component is still mounted
       if (isMountedRef?.current) {
         setAutoSaveStatus('saved');
         setLastSaved(new Date());
         setHasBeenSavedOnce(true);
-        addToast({
-          type: 'success',
-          title: 'Proposal Saved',
-          message: 'Your proposal has been saved successfully.',
-        });
+        addToast({ type: 'success', title: 'Proposal Saved', message: 'Your proposal has been saved successfully.' });
       }
     } catch (error) {
-      console.error('Save failed:', error);
+      console.error('Save failed — full error object:', error);
+      console.error('Save failed — message:', error?.message);
+      console.error('Save failed — code:', error?.code);
+      console.error('Save failed — details:', error?.details);
+      console.error('Save failed — hint:', error?.hint);
       if (isMountedRef?.current) {
         setAutoSaveStatus('unsaved');
-        addToast({
-          type: 'error',
-          title: 'Save Failed',
-          message: error?.message || 'Failed to save proposal. Please try again.',
-        });
+        addToast({ type: 'error', title: 'Save Failed', message: error?.message || 'Failed to save proposal. Please try again.' });
       }
     }
-  }, [getProposalId, isLoadingProposal, formData, SAVE_QUEUE_ENABLED, saveQueue, currentProposalId, isMountedRef, addToast, calculateChargeableValue, calculateProgress]);
+  }, [getProposalId, isLoadingProposal, SAVE_QUEUE_ENABLED, saveQueue, currentProposalId, isMountedRef, addToast, calculateChargeableValue, calculateProgress]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ^ formData intentionally excluded — reads from formDataRef.current to avoid stale closure
 
   // Calculate Revenue Centers Grand Total (Chargeable)
   const calculateRevenueCentersGrandTotal = useCallback(() => {
@@ -998,7 +1185,7 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
     console.log('=== calculateRevenueCentersGrandTotal END ===');
     
     return grandTotal;
-  }, [formData?.modules, formData?.internalValueAddedScope, formData?.siteCosts, formData?.materials, formData?.labour, formData?.marginedSubContractors, formData?.zeroMarginedSupply, formData?.logistics, formData?.revenueCenters?.revenueType]);
+  }, [formData?.modules, formData?.internalValueAddedScope, formData?.siteCosts, formData?.materials, formData?.labour, formData?.marginedSubContractors, formData?.zeroMarginedSupply, formData?.logistics, formData?.revenueCenters?.revenueType, formData?.revenueCenters?.grandTotal]);
 
   // Calculate Chargeable Value WITHOUT Zero Rate (NEW FORMULA)
   const calculateChargeableValueWithoutZeroRate = useCallback(() => {
@@ -1096,14 +1283,14 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
   const calculateRateBUA = useCallback(() => {
     // FIX: Use Chargeable + Zero Rated (from Proposal Summary) as numerator for Ft² Rate BUA
     const chargeablePlusZeroRated = calculateChargeableValue();
-    const grandTotal = formData?.revenueCenters?.grandTotal || 0;
     const areas = calculateModuleTotalAreas();
 
-    const m2RateBUA = areas?.m2 > 0 ? grandTotal / areas?.m2 : 0;
     const ft2RateBUA = areas?.ft2 > 0 ? chargeablePlusZeroRated / areas?.ft2 : 0;
+    // M² Rate BUA = Ft² Rate BUA × 10.7639 (unit conversion: 1 m² = 10.7639 ft²)
+    const m2RateBUA = ft2RateBUA * 10.7639;
 
     return { m2RateBUA, ft2RateBUA };
-  }, [formData?.revenueCenters?.grandTotal, calculateModuleTotalAreas, calculateChargeableValue]);
+  }, [calculateModuleTotalAreas, calculateChargeableValue, formData?.revenueCenters?.grandTotal]);
 
   // CRITICAL FIX: Memoize the rate calculation result to prevent recalculation loops
   const rateBUA = useMemo(() => calculateRateBUA(), [calculateRateBUA]);
@@ -1158,6 +1345,123 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
     proposalTotals?.risk
   ]);
 
+  // Add this block - Calculate proposal totals whenever formData changes
+  useEffect(() => {
+    const calculateTotals = () => {
+      // Calculate Internal Value-Added Total
+      const internalValueAdded = (formData?.internalValueAddedScope || [])?.reduce((sum, item) => {
+        return sum + (parseFloat(item?.productionCost) || 0);
+      }, 0);
+
+      // Calculate Margined Sub-Contractors Total
+      const marginedSubContractors = (formData?.marginedSubContractors || [])?.reduce((sum, item) => {
+        return sum + (parseFloat(item?.totalCost) || 0);
+      }, 0);
+
+      // Calculate Zero Margined Supply Total
+      const zeroMarginedSupply = (formData?.zeroMarginedSupply || [])?.reduce((sum, item) => {
+        return sum + (parseFloat(item?.totalCost) || 0);
+      }, 0);
+
+      // Calculate Materials Total (Project Mod Total)
+      const materials = (() => {
+        const modules = formData?.modules || [];
+        const totalAreaFt2 = modules?.reduce((sum, m) => {
+          const quantity = parseFloat(m?.quantity) || 0;
+          const areaFt2 = parseFloat(m?.areaFeet) || 0;
+          return sum + (quantity * areaFt2);
+        }, 0);
+        const materialsList = formData?.materials || [];
+        const costPerSqFtTotal = materialsList?.reduce((sum, item) => sum + (parseFloat(item?.costWastePSQF) || 0), 0);
+        return costPerSqFtTotal * totalAreaFt2;
+      })();
+
+      // Calculate Labour Total (Project Mod Total)
+      const labour = (() => {
+        const labourRawTotal = (formData?.labour || [])?.reduce((sum, item) => {
+          return sum + (parseFloat(item?.total) || 0);
+        }, 0);
+        const modules = formData?.modules || [];
+        const totalAreaFt2 = modules?.reduce((sum, m) => {
+          const quantity = parseFloat(m?.quantity) || 0;
+          const areaFt2 = parseFloat(m?.areaFeet) || 0;
+          return sum + (quantity * areaFt2);
+        }, 0);
+        const categoryPriority = ['ppvc-module', 'floor-cassettes', 'roof-cassettes', 'roof-modules-flat', 'roof-module-pitched', 'roof-module-hybrid', 'panelized-module', 'kit-of-parts'];
+        let smallestModuleAreaFt2 = 0;
+        for (const category of categoryPriority) {
+          const categoryModules = modules?.filter(m => m?.category === category);
+          if (categoryModules?.length > 0) {
+            const smallestModule = categoryModules?.reduce((min, module) => {
+              const currentAreaFt2 = parseFloat(module?.areaFeet) || 0;
+              const minAreaFt2 = parseFloat(min?.areaFeet) || 0;
+              return currentAreaFt2 < minAreaFt2 ? module : min;
+            }, categoryModules?.[0]);
+            smallestModuleAreaFt2 = parseFloat(smallestModule?.areaFeet) || 0;
+            break;
+          }
+        }
+        const labourCostPSQF = smallestModuleAreaFt2 > 0 ? labourRawTotal / smallestModuleAreaFt2 : 0;
+        return labourCostPSQF * totalAreaFt2;
+      })();
+
+      // Calculate Total Over Head
+      const totalOverHead = Object.values(formData?.overheadCalculations || {})?.reduce((sum, val) => {
+        const duration = parseFloat(val?.duration) || 0;
+        const overHeadPerWeek = parseFloat(val?.overHeadPerWeek) || 0;
+        const allocation = parseFloat(val?.allocation) || 0;
+        const contingency = parseFloat(val?.contingency) || 0;
+        const sectionTotal = duration * overHeadPerWeek * (allocation / 100) * (1 + contingency / 100);
+        return sum + sectionTotal;
+      }, 0);
+
+      // Calculate Site Costs Total
+      const siteCostsTotal = (formData?.siteCosts || [])?.reduce((sum, item) => {
+        return sum + (parseFloat(item?.total) || 0);
+      }, 0);
+
+      // Calculate Logistics Total
+      const logisticsTotal = (formData?.logistics || [])?.length > 0
+        ? (parseFloat(formData?.logistics?.[0]?.totalLogistics) || 0)
+        : 0;
+
+      // Calculate Commission
+      const commission = (formData?.commissionItems || [])?.reduce((sum, item) => {
+        return sum + (parseFloat(item?.total) || 0);
+      }, 0);
+
+      // Calculate Finance
+      const finance = parseFloat(formData?.financing?.totalFinanceCost) || 0;
+
+      // Calculate Risk
+      const risk = (formData?.risks || [])?.reduce((sum, item) => {
+        return sum + (parseFloat(item?.cost) || 0);
+      }, 0);
+
+      // Calculate Grand Total
+      const grandTotal = internalValueAdded + marginedSubContractors + zeroMarginedSupply + 
+                        materials + labour + totalOverHead + siteCostsTotal + logisticsTotal + 
+                        commission + finance + risk;
+
+      setProposalTotals({
+        internalValueAdded,
+        marginedSubContractors,
+        zeroMarginedSupply,
+        materials,
+        labour,
+        totalOverHead,
+        siteCostsTotal,
+        logisticsTotal,
+        commission,
+        finance,
+        risk,
+        grandTotal
+      });
+    };
+
+    calculateTotals();
+  }, [formData]);
+
   const renderTabContent = () => {
     return (
       <>
@@ -1176,7 +1480,7 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
                 <div className="flex-1 grid grid-cols-2 gap-6">
                   <div>
                     <p className="text-sm font-medium text-gray-700 dark:text-muted-foreground mb-1">M² Rate BUA</p>
-                    <p className="text-2xl font-bold dark:text-foreground">${formatNumber(calculateChargeableValueWithoutZeroRate())}</p>
+                    <p className="text-2xl font-bold dark:text-foreground">${formatNumber(rateBUA?.m2RateBUA)}</p>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-gray-700 dark:text-muted-foreground mb-1">Ft² Rate BUA</p>
@@ -1323,7 +1627,7 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
         </div>
         {/* Revenue Centers Tab */}
         <div style={{ display: activeTab === 'revenue-centers' ? 'block' : 'none' }}>
-          <RevenueCentersTab formData={formData} onChange={handleChange} errors={{}} />
+          <RevenueCentersTab formData={formData} onChange={handleChange} errors={{}} isProposalLoaded={isProposalLoaded} />
         </div>
         {/* Financing Tab */}
         <div style={{ display: activeTab === 'financing' ? 'block' : 'none' }}>
@@ -1386,6 +1690,103 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
     }
   }, [pendingNavigation, navigate, handleManualSave]);
 
+  const handleCreateNewVersion = async () => {
+    const proposalId = getProposalId();
+    if (!proposalId) {
+      addToast?.({ type: 'warning', title: 'Save Required', message: 'Please save the proposal first before creating a version.' });
+      return;
+    }
+    setIsCreatingVersion(true);
+    try {
+      // BUG FIX: Build snapshot from current formData (in-memory state), NOT from DB.
+      // Fetching from DB would miss any unsaved changes made since the last save.
+      const resolvedTitle = formData?.proposalTitle || formData?.projectTitle || '';
+      const snapshot = {
+        title: resolvedTitle,
+        project_name: resolvedTitle,
+        description: formData?.projectType || '',
+        value: String(calculateChargeableValue() ?? 0),
+        client_id: formData?.clientId || null,
+        modules: formData?.modules || [],
+        milestones: formData?.milestones || [],
+        materials: formData?.materials || [],
+        labour: formData?.labour || [],
+        estimation_model: formData?.estimationModel || 'single-module',
+        overheads: formData?.overheadCalculations || {},
+        site_costs: formData?.siteCosts || [],
+        logistics: formData?.logistics || [],
+        commission: formData?.commission || 0,
+        commission_items: formData?.commissionItems || [],
+        revenue_centers: formData?.revenueCenters || {},
+        financing: formData?.financing || {},
+        risks: formData?.risks || [],
+        payment_terms: formData?.paymentTerms || {},
+        internal_value_added_scope: formData?.internalValueAddedScope || [],
+        margined_sub_contractors: formData?.marginedSubContractors || [],
+        zero_margined_supply: formData?.zeroMarginedSupply || [],
+        ft2_rate_bua: formData?.ft2RateBUA || 0,
+        start_date: formData?.startDate || null,
+        deadline: formData?.endDate || null,
+        project_details: {
+          projectName: formData?.projectName || '',
+          projectType: formData?.projectType || '',
+          clientType: formData?.clientType || '',
+          country: formData?.country || '',
+          state: formData?.state || '',
+          city: formData?.city || '',
+          projectAddress: formData?.projectAddress || '',
+          targetBudgetPerSqft: formData?.targetBudgetPerSqft || '',
+          estimatedAreaSqft: formData?.estimatedAreaSqft || '',
+          scope: formData?.scope || [],
+          selectedMapLocation: formData?.selectedMapLocation || null
+        },
+        project_duration: {
+          design: formData?.design || {},
+          procurement: formData?.procurement || {},
+          production: formData?.production || {}
+        },
+      };
+
+      const proposalValue = calculateChargeableValue() || proposalTotals?.grandTotal || 0;
+
+      const { data, error } = await proposalService?.createVersion(proposalId, snapshot, {
+        versionLabel: versionLabel || `Version ${(currentVersionNumber || 0) + 1}`,
+        changeNotes: versionChangeNotes,
+        versionStatus: 'draft',
+        proposalValue,
+      });
+
+      if (error) {
+        addToast?.({ type: 'error', title: 'Version Failed', message: 'Failed to create version.' });
+      } else {
+        // BUG FIX: Fetch the actual version number from DB instead of incrementing locally
+        const { data: latestVersionNum } = await proposalService?.getLatestVersionNumber(proposalId);
+        const newVersionNum = latestVersionNum || data?.version_number || (currentVersionNumber || 0) + 1;
+        setCurrentVersionNumber(newVersionNum);
+        addToast?.({ type: 'success', title: 'Version Created', message: `Version ${newVersionNum} saved successfully.` });
+        setShowVersionModal(false);
+        setVersionLabel('');
+        setVersionChangeNotes('');
+        setIsPreviewMode(false);
+        setPreviewVersionNumber(null);
+      }
+    } catch (err) {
+      addToast?.({ type: 'error', title: 'Version Failed', message: 'Failed to create version.' });
+    } finally {
+      setIsCreatingVersion(false);
+    }
+  };
+
+  const handleOpenVersionHistory = () => {
+    const proposalId = getProposalId();
+    navigate('/proposal-version-history-panel', {
+      state: {
+        proposalId,
+        proposalTitle: formData?.proposalTitle || 'Proposal',
+      }
+    });
+  };
+
   return (
     <>
       <Helmet>
@@ -1416,10 +1817,36 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
                 </button>
                 <Icon name="ChevronRight" size={16} className="text-muted-foreground dark:text-muted-foreground" />
                 <span className="text-foreground dark:text-foreground font-medium">Create New</span>
+                {isPreviewMode && previewVersionNumber ? (
+                  <>
+                    <Icon name="ChevronRight" size={16} className="text-muted-foreground" />
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 text-xs font-semibold border border-yellow-400/30">
+                      <Icon name="Eye" size={11} />
+                      Previewing V{previewVersionNumber}
+                    </span>
+                    <button
+                      onClick={() => {
+                        const proposalId = getProposalId();
+                        navigate('/new-proposal-creation-workspace', { state: { proposalId } });
+                      }}
+                      className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+                    >
+                      Exit Preview
+                    </button>
+                  </>
+                ) : currentVersionNumber > 0 ? (
+                  <>
+                    <Icon name="ChevronRight" size={16} className="text-muted-foreground" />
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#436958]/10 text-[#436958] text-xs font-semibold">
+                      <Icon name="GitBranch" size={11} />
+                      V{currentVersionNumber}
+                    </span>
+                  </>
+                ) : null}
               </div>
 
               {/* Auto-save Status & Actions */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground dark:text-muted-foreground">
                   <Icon
                     name={getAutoSaveIcon()}
@@ -1428,17 +1855,59 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
                   />
                   <span>{getAutoSaveText()}</span>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleManualSave}
-                  iconName="Save"
-                  iconPosition="left"
-                  iconSize={16}
-                  disabled={autoSaveStatus === 'saving'}
-                >
-                  Save
-                </Button>
+
+                {/* Version History Button */}
+                {getProposalId() && (
+                  <button
+                    onClick={handleOpenVersionHistory}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                    title="View Version History"
+                  >
+                    <Icon name="History" size={14} />
+                    History
+                  </button>
+                )}
+
+                {/* Create Version Button */}
+                {getProposalId() && (
+                  <button
+                    onClick={() => setShowVersionModal(true)}
+                    disabled={isCreatingVersion}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[#436958] text-[#436958] hover:bg-[#436958]/10 transition-colors disabled:opacity-60"
+                    title="Create New Version"
+                  >
+                    <Icon name="GitBranch" size={14} />
+                    New Version
+                  </button>
+                )}
+
+                {isPreviewMode ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const proposalId = getProposalId();
+                      navigate('/new-proposal-creation-workspace', { state: { proposalId } });
+                    }}
+                    iconName="ArrowLeft"
+                    iconPosition="left"
+                    iconSize={16}
+                  >
+                    Back to Workspace
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleManualSave}
+                    iconName="Save"
+                    iconPosition="left"
+                    iconSize={16}
+                    disabled={autoSaveStatus === 'saving'}
+                  >
+                    Save
+                  </Button>
+                )}
               </div>
             </div>
           </div>
@@ -1543,6 +2012,70 @@ const totalOverHead = ['design', 'procurement', 'general', 'production', 'projec
                       </Button>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Create Version Modal */}
+        {showVersionModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-card border border-border rounded-xl shadow-xl w-full max-w-md mx-4">
+              <div className="flex items-center justify-between p-5 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <Icon name="GitBranch" size={18} className="text-[#436958]" />
+                  <h3 className="text-base font-semibold text-foreground">Create New Version</h3>
+                </div>
+                <button onClick={() => setShowVersionModal(false)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted transition-colors">
+                  <Icon name="X" size={16} />
+                </button>
+              </div>
+              <div className="p-5 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Version Label</label>
+                  <input
+                    type="text"
+                    value={versionLabel}
+                    onChange={(e) => setVersionLabel(e?.target?.value)}
+                    placeholder={`e.g. Version ${(currentVersionNumber || 0) + 1} — Revised Scope`}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#436958] focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Change Notes</label>
+                  <textarea
+                    value={versionChangeNotes}
+                    onChange={(e) => setVersionChangeNotes(e?.target?.value)}
+                    placeholder="Describe what changed in this version..."
+                    rows={3}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#436958] focus:border-transparent resize-none"
+                  />
+                </div>
+                <div className="flex gap-3 pt-1">
+                  <button
+                    onClick={() => setShowVersionModal(false)}
+                    className="flex-1 px-4 py-2 text-sm font-medium rounded-lg border border-border hover:bg-muted transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCreateNewVersion}
+                    disabled={isCreatingVersion}
+                    className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-[#436958] text-white hover:bg-[#436958]/90 disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
+                  >
+                    {isCreatingVersion ? (
+                      <>
+                        <Icon name="Loader2" size={14} className="animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Icon name="Plus" size={14} />
+                        Create Version
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
             </div>

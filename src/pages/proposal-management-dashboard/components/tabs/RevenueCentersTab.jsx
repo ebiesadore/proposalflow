@@ -4,24 +4,9 @@ import { DecimalMath } from '../../../../utils/decimalMath';
 
 const USE_MEMO_CALCULATIONS = import.meta.env?.VITE_USE_MEMO_CALCULATIONS === 'true';
 
-const RevenueCentersTab = ({ formData, onChange, errors }) => {
-  const [revenueType, setRevenueType] = useState(() => {
-    // Initialize from formData.revenueCenters object (not array)
-    const rc = formData?.revenueCenters;
-    if (rc && typeof rc === 'object' && !Array.isArray(rc)) {
-      return rc?.revenueType || 'chargeable';
-    }
-    return 'chargeable';
-  });
-
-  // CRITICAL FIX: Sync revenueType with formData when it changes (after loading from database)
-  useEffect(() => {
-    const rc = formData?.revenueCenters;
-    if (rc && typeof rc === 'object' && !Array.isArray(rc) && rc?.revenueType) {
-      console.log('[RevenueCentersTab] Loading revenueType from formData:', rc?.revenueType);
-      setRevenueType(rc?.revenueType);
-    }
-  }, [formData?.revenueCenters?.revenueType]);
+const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => {
+  // Derive revenueType directly from formData — no local state, no sync effect, no race condition
+  const revenueType = formData?.revenueCenters?.revenueType ?? 'chargeable';
 
   // Auto-generate Manufacturing data from multiple sources
   const generateManufacturingData = useMemo(() => {
@@ -78,7 +63,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
     // CRITICAL FIX: Only include Materials Total and Labour Total in Cost + Margin mode
     // Chargeable mode = sale price-based (what you charge customers)
     // Cost + Margin mode = cost price-based (cost to build + margin)
-    if (revenueType === 'cost_margin') {
+    if (revenueType === 'cost-margin') {
       // 4. Materials Total - Only in Cost + Margin mode
       const materialsTotal = (() => {
         // Get total area from Modular Build Up (in Ft²)
@@ -228,25 +213,20 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
   useEffect(() => {
     setChargeableData(prev => ({
       ...prev,
-      manufacturing: generateManufacturingData
-    }));
-  }, [generateManufacturingData]);
-
-  // Auto-update sub contracted data when source data changes
-  useEffect(() => {
-    setChargeableData(prev => ({
-      ...prev,
-      subContracted: generateSubContractedData
-    }));
-  }, [generateSubContractedData]);
-
-  // Auto-update zero rate data when source data changes
-  useEffect(() => {
-    setChargeableData(prev => ({
-      ...prev,
+      manufacturing: generateManufacturingData,
+      subContracted: generateSubContractedData,
       zeroRate: generateZeroRateData
     }));
-  }, [generateZeroRateData]);
+  }, [generateManufacturingData, generateSubContractedData, generateZeroRateData]);
+
+  // chargeableDataRef: holds the latest chargeableData so Effect B can read it without
+  // listing chargeableData as a reactive dep. This prevents extra onChange fires in
+  // Cost+Margin mode when generateManufacturingData recomputes (because it depends on
+  // revenueType) and triggers setChargeableData → Effect B → onChange cascade.
+  const chargeableDataRef = useRef(chargeableData);
+  useEffect(() => {
+    chargeableDataRef.current = chargeableData;
+  }, [chargeableData]);
 
   // Calculate totals from Materials + Labour
   const calculateMaterialsTotal = useMemo(() => {
@@ -380,11 +360,10 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
   // Auto-generate Cost + Margin data from all sources
   const costMarginData = useMemo(() => {
     const items = [];
-    let idCounter = 1;
 
     // Additional Scope - Internal Value-Added Scope > Production $
     items?.push({
-      id: idCounter++,
+      id: 'Internal Value-Added Scope - Production $',
       item: 'Internal Value-Added Scope - Production $',
       amount: calculateInternalValueAddedTotal,
       marginPercent: 0
@@ -392,7 +371,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Additional Scope - Margined Sub-Contractors > Contracted $
     items?.push({
-      id: idCounter++,
+      id: 'Margined Sub-Contractors - Contracted $',
       item: 'Margined Sub-Contractors - Contracted $',
       amount: calculateMarginedSubContractorsTotal,
       marginPercent: 0
@@ -400,7 +379,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Additional Scope - Zero Margined Supply > Production $
     items?.push({
-      id: idCounter++,
+      id: 'Zero Margined Supply - Production $',
       item: 'Zero Margined Supply - Production $',
       amount: calculateZeroMarginedSupplyTotal,
       marginPercent: 0
@@ -408,7 +387,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Materials + Labour > Materials > Material Total
     items?.push({
-      id: idCounter++,
+      id: 'Materials Total',
       item: 'Materials Total',
       amount: calculateMaterialsTotal,
       marginPercent: 0
@@ -416,7 +395,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Materials + Labour > Labour > Labour Total
     items?.push({
-      id: idCounter++,
+      id: 'Labour Total',
       item: 'Labour Total',
       amount: calculateLabourTotal,
       marginPercent: 0
@@ -424,7 +403,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Over Heads > Overhead Calculations > Total Over Head
     items?.push({
-      id: idCounter++,
+      id: 'Total Over Head',
       item: 'Total Over Head',
       amount: calculateOverheadsTotal,
       marginPercent: 0
@@ -432,7 +411,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Site Works Costs > Site Cost Total
     items?.push({
-      id: idCounter++,
+      id: 'Site Cost Total',
       item: 'Site Cost Total',
       amount: calculateSiteWorksTotal,
       marginPercent: 0
@@ -440,7 +419,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Logistics > Laydown > Total $
     items?.push({
-      id: idCounter++,
+      id: 'Laydown Total $',
       item: 'Laydown Total $',
       amount: calculateLaydownTotal,
       marginPercent: 0
@@ -448,7 +427,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Logistics > Local > Total $
     items?.push({
-      id: idCounter++,
+      id: 'Local Total $',
       item: 'Local Total $',
       amount: calculateLocalTotal,
       marginPercent: 0
@@ -456,7 +435,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Logistics > Destination > Total $
     items?.push({
-      id: idCounter++,
+      id: 'Destination Total $',
       item: 'Destination Total $',
       amount: calculateDestinationTotal,
       marginPercent: 0
@@ -464,7 +443,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Logistics > Sea Shipping > Total $
     items?.push({
-      id: idCounter++,
+      id: 'Sea Shipping Total $',
       item: 'Sea Shipping Total $',
       amount: calculateSeaShippingTotal,
       marginPercent: 0
@@ -474,7 +453,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
 
     // Financing > Financing Cost
     items?.push({
-      id: idCounter++,
+      id: 'Financing Cost',
       item: 'Financing Cost',
       amount: calculateFinancingCost,
       marginPercent: 0
@@ -557,7 +536,7 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
     
     if (riskAmount > 0) {
       dataWithRisk?.push({
-        id: dataWithRisk?.length + 1,
+        id: 'Risk Allocation',
         item: `Risk Allocation (${calculateRiskAllocation?.toFixed(2)}%)`,
         amount: riskAmount,
         marginPercent: 0
@@ -580,37 +559,125 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
     const rc = formData?.revenueCenters;
     if (rc && typeof rc === 'object' && !Array.isArray(rc)) {
       if (rc?.marginPercentages && Object.keys(rc?.marginPercentages)?.length > 0) {
-        console.log('[RevenueCentersTab] Loading marginPercentages from formData:', rc?.marginPercentages);
-        setMarginPercentages(rc?.marginPercentages);
+        setMarginPercentages(prev => {
+          // Only update if the incoming value is actually different
+          if (JSON.stringify(prev) !== JSON.stringify(rc?.marginPercentages)) {
+            console.log('[RevenueCentersTab] Loading marginPercentages from formData:', rc?.marginPercentages);
+            return rc?.marginPercentages;
+          }
+          return prev;
+        });
       }
       if (rc?.totalMarginPercent !== undefined && rc?.totalMarginPercent !== null) {
-        console.log('[RevenueCentersTab] Loading totalMarginPercent from formData:', rc?.totalMarginPercent);
-        setTotalMarginPercent(rc?.totalMarginPercent);
+        setTotalMarginPercent(prev => {
+          if (prev !== rc?.totalMarginPercent) {
+            console.log('[RevenueCentersTab] Loading totalMarginPercent from formData:', rc?.totalMarginPercent);
+            return rc?.totalMarginPercent;
+          }
+          return prev;
+        });
       }
     }
   }, [formData?.revenueCenters?.marginPercentages, formData?.revenueCenters?.totalMarginPercent]);
 
   // Use ref to track previous values and prevent infinite loops
   const prevValuesRef = useRef({
-    revenueType: formData?.revenueCenters?.revenueType || 'chargeable',
+    revenueType: formData?.revenueCenters?.revenueType ?? 'chargeable',
     marginPercentages: formData?.revenueCenters?.marginPercentages || {},
     totalMarginPercent: formData?.revenueCenters?.totalMarginPercent || 0
   });
 
-  // Persist states to formData whenever they change
+  // Mount guard: skip Effect B on initial render so prevValuesRef never overwrites the DB-loaded revenueType
+  const isMountedRef = useRef(false);
+
+  // isLoadedRef: becomes true only after the first real DB data arrives in formData.revenueCenters.
+  // Both Effect B and Effect C check this before calling onChange — staying silent during the initial load.
+  const isLoadedRef = useRef(false);
+
+  // costMarginDataWithRiskRef: holds the latest costMarginDataWithRisk so Effect B can read it
+  // without listing it as a reactive dep. This breaks the cascade where every upstream formData
+  // field change (materials, labour, overheads, etc.) recomputes costMarginDataWithRisk →
+  // triggers Effect B → calls onChange → setFormData → flicker in Cost+Margin mode.
+  const costMarginDataWithRiskRef = useRef(costMarginDataWithRisk);
   useEffect(() => {
+    costMarginDataWithRiskRef.current = costMarginDataWithRisk;
+  }, [costMarginDataWithRisk]);
+
+  // CRITICAL FIX: Keep a ref to the latest formData.revenueCenters so Effect B always
+  // spreads the current value — not a stale closure snapshot from when Effect B was last
+  // scheduled. Without this, auto-save triggers a re-render that causes Effect B to fire
+  // with the old formData.revenueCenters, overwriting user edits with stale data.
+  const formDataRevenueCentersRef = useRef(formData?.revenueCenters);
+  useEffect(() => {
+    formDataRevenueCentersRef.current = formData?.revenueCenters;
+  }, [formData?.revenueCenters]);
+
+  // Bug 4 FIX: Use isProposalLoaded prop (set by index.jsx after async load completes) instead of
+  // unreliable non-default value detection. This works for ALL proposals including new chargeable
+  // ones where grandTotal is 0 and revenueType is still 'chargeable'.
+  // Bug 3 FIX: Delay setting isLoadedRef by one render tick via setTimeout(0) so Effect B never
+  // fires with partially-stale data on re-entry (chargeableData / costMarginDataWithRisk may still
+  // be mid-update on the same render that DB data arrives).
+  useEffect(() => {
+    if (!isLoadedRef?.current && isProposalLoaded) {
+      setTimeout(() => {
+        isLoadedRef.current = true;
+      }, 0);
+    }
+  }, [isProposalLoaded]);
+
+  // Persist states to formData whenever they change — MERGED with grandTotal calculation
+  // so there is only ever ONE onChange call per change cycle instead of two.
+  useEffect(() => {
+    // Skip the very first render — formData is still at its default state before the async DB load completes.
+    if (!isMountedRef?.current) {
+      isMountedRef.current = true;
+      return;
+    }
+
+    // Stay silent during the initial load — wait until real DB data has arrived.
+    if (!isLoadedRef?.current) {
+      return;
+    }
+
     // Check if any value has actually changed from previous
     const hasRevenueTypeChanged = prevValuesRef?.current?.revenueType !== revenueType;
     const hasMarginPercentagesChanged = JSON.stringify(prevValuesRef?.current?.marginPercentages) !== JSON.stringify(marginPercentages);
     const hasTotalMarginChanged = prevValuesRef?.current?.totalMarginPercent !== totalMarginPercent;
     
     const hasChanged = hasRevenueTypeChanged || hasMarginPercentagesChanged || hasTotalMarginChanged;
+
+    // Read chargeableData from ref (not reactive dep) to avoid extra fires when
+    // generateManufacturingData recomputes on revenueType change.
+    const currentChargeableData = chargeableDataRef?.current;
+
+    // Read costMarginDataWithRisk from ref (not reactive dep) to avoid extra fires when
+    // any upstream formData field (materials, labour, overheads, etc.) changes and causes
+    // costMarginDataWithRisk to recompute — which was the primary Cost+Margin flicker source.
+    const currentCostMarginDataWithRisk = costMarginDataWithRiskRef?.current;
+
+    // Compute grandTotal inline so we can include it in the same single onChange call
+    let grandTotal = 0;
+    if (revenueType === 'chargeable') {
+      // Read from chargeableData state directly (same source as UI display) to avoid
+      // the one-render lag that chargeableDataRef.current has vs the displayed value.
+      grandTotal =
+        calculateTotal(chargeableData?.manufacturing) +
+        calculateTotal(chargeableData?.subContracted) +
+        calculateTotal(chargeableData?.zeroRate);
+    } else if (revenueType === 'cost-margin') {
+      grandTotal = calculateFinalTotal(currentCostMarginDataWithRisk);
+    }
+
+    const currentGrandTotal = formData?.revenueCenters?.grandTotal;
+    const hasGrandTotalChanged = currentGrandTotal !== grandTotal;
     
-    if (hasChanged && onChange) {
+    if ((hasChanged || hasGrandTotalChanged) && onChange) {
       console.log('RevenueCentersTab: Persisting changes:', {
         revenueType: { old: prevValuesRef?.current?.revenueType, new: revenueType },
         marginPercentages: { changed: hasMarginPercentagesChanged },
-        totalMarginPercent: { old: prevValuesRef?.current?.totalMarginPercent, new: totalMarginPercent }
+        totalMarginPercent: { old: prevValuesRef?.current?.totalMarginPercent, new: totalMarginPercent },
+        grandTotal: { old: currentGrandTotal, new: grandTotal }
       });
       
       // Update ref with new values
@@ -620,16 +687,24 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
         totalMarginPercent
       };
       
-      // CRITICAL FIX: Call onChange with field name and value (not entire formData)
+      // Single onChange call — covers persist + grandTotal in one setFormData update
       onChange('revenueCenters', {
-        ...formData?.revenueCenters,
-        chargeableData,
+        ...formDataRevenueCentersRef?.current,
+        chargeableData: currentChargeableData,
         marginPercentages,
         totalMarginPercent,
-        revenueType
+        revenueType,
+        grandTotal,
       });
     }
-  }, [marginPercentages, totalMarginPercent, revenueType, chargeableData, onChange, formData?.revenueCenters]);
+  // CRITICAL: formData?.revenueCenters and costMarginDataWithRisk intentionally
+  // excluded from deps. costMarginDataWithRisk is read via costMarginDataWithRiskRef
+  // to avoid the flicker cascade in Cost+Margin mode. chargeableData is included
+  // so the Chargeable mode grandTotal always matches the UI display value.
+  // formDataRevenueCentersRef is used instead of formData?.revenueCenters to prevent
+  // stale closure data reboot after auto-save triggers a re-render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marginPercentages, totalMarginPercent, revenueType, onChange, chargeableData]);
 
   // Update margin percentage for a specific item
   const updateMarginPercent = (id, value) => {
@@ -663,55 +738,20 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
     }, 0);
   };
 
-  // NEW: Modified to calculate Grand Total = (Subtotal × 1.45) + Commission
+  // NEW: Modified to calculate Grand Total = Subtotal × (1 + totalMarginPercent/100)
+  // Bug 5 FIX: Commission total is intentionally NOT included here. RevenueCenters calculates
+  // only its own subtotal. The combined total (RC + Commission) is assembled once in index.jsx
+  // for Proposal Summary only. This breaks the circular loop:
+  //   RevenueCenters grandTotal (included commission) → onChange → setFormData →
+  //   CommissionTab recalculates → onChange → setFormData → RevenueCenters fires again.
   const calculateFinalTotal = (data) => {
     const baseTotal = calculateTotal(data);
     const marginedTotal = calculateMarginTotal(data);
     const totalWithLineMargins = marginedTotal;
-    // Apply total margin percentage (45% or user-entered)
+    // Apply total margin percentage only — no Commission added here
     const subtotalWithMargin = totalWithLineMargins * (1 + totalMarginPercent / 100);
-    // Add Commission Total after margin is applied
-    const finalTotal = subtotalWithMargin + calculateCommissionTotal;
-    return finalTotal;
+    return subtotalWithMargin;
   };
-
-  // NEW: Auto-save Grand Total to formData whenever it changes
-  useEffect(() => {
-    let grandTotal = 0;
-
-    if (revenueType === 'chargeable') {
-      // Chargeable mode: Sum of Manufacturing + Sub Contracted + Zero Rate
-      grandTotal = 
-        calculateTotal(chargeableData?.manufacturing) +
-        calculateTotal(chargeableData?.subContracted) +
-        calculateTotal(chargeableData?.zeroRate);
-    } else if (revenueType === 'cost-margin') {
-      // Cost + Margin mode: Final total with margins
-      grandTotal = calculateFinalTotal(costMarginDataWithRisk);
-    }
-
-    // Save to formData.revenueCenters.grandTotal
-    const currentGrandTotal = formData?.revenueCenters?.grandTotal;
-    
-    // Only update if value actually changed (avoid infinite loops)
-    if (currentGrandTotal !== grandTotal) {
-      console.log('[RevenueCentersTab] Saving Grand Total:', grandTotal, 'for revenue type:', revenueType);
-      onChange('revenueCenters', {
-        ...formData?.revenueCenters,
-        grandTotal: grandTotal
-      });
-    }
-  }, [
-    revenueType,
-    chargeableData?.manufacturing,
-    chargeableData?.subContracted,
-    chargeableData?.zeroRate,
-    costMarginDataWithRisk,
-    marginPercentages,
-    totalMarginPercent,
-    formData?.revenueCenters?.grandTotal,
-    onChange
-  ]);
 
   const renderTable = (title, data, category = null, isCostMargin = false) => {
     const total = calculateTotal(data);
@@ -855,7 +895,14 @@ const RevenueCentersTab = ({ formData, onChange, errors }) => {
         </label>
         <select
           value={revenueType}
-          onChange={(e) => setRevenueType(e?.target?.value)}
+          onChange={(e) => {
+            if (onChange) {
+              onChange('revenueCenters', {
+                ...formData?.revenueCenters,
+                revenueType: e?.target?.value,
+              });
+            }
+          }}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 transition-colors"
         >
           <option value="chargeable">Chargeable</option>

@@ -160,28 +160,6 @@ export const clientService = {
         try {
             const user = await getAuthUser();
 
-            // Ensure user_profile exists before creating client
-            const { data: existingProfile } = await supabase
-                ?.from("user_profiles")
-                ?.select("id")
-                ?.eq("id", user?.id)
-                ?.single();
-
-            // If user_profile doesn't exist, create it
-            if (!existingProfile) {
-                const { error: profileError } = await supabase?.from("user_profiles")?.insert({
-                    id: user?.id,
-                    email: user?.email,
-                    full_name: user?.user_metadata?.full_name || user?.email?.split("@")?.[0] || "User",
-                    role: "Standard User",
-                });
-
-                if (profileError) {
-                    console.error("Failed to create user profile:", profileError);
-                    throw new Error("Failed to initialize user profile");
-                }
-            }
-
             const { data, error } = await supabase
                 ?.from("clients")
                 ?.insert({

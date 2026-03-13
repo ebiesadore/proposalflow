@@ -8,9 +8,12 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
 import { materialService } from '../../services/materialService';
+import { useToast } from '../../contexts/ToastContext';
+import ImportExportControls from './components/ImportExportControls';
 
 const MaterialLibraryManagement = () => {
   const navigate = useNavigate();
+  const toast = useToast();
   const [materials, setMaterials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -122,14 +125,21 @@ const MaterialLibraryManagement = () => {
 
   const handleEditMaterial = (material) => {
     setSelectedMaterial(material);
+    // Parse existing csi_code (e.g. "01.23.45") back into parts
+    const existingCsiCode = material?.csi_code || '';
+    const csiParts = existingCsiCode?.split('.');
+    // csiParts[0] = category prefix (auto-derived), [1] = csiCode1, [2] = csiCode2
+    const parsedCsiCode1 = csiParts?.[1] || '';
+    const parsedCsiCode2 = csiParts?.[2] || '';
+
     setFormData({
       name: material?.name || '',
       description: material?.description || '',
       unitCost: material?.unit_cost || '',
       unit: material?.unit || 'piece',
       category: material?.category || '01_General Requirements',
-      csiCode1: '',
-      csiCode2: ''
+      csiCode1: parsedCsiCode1,
+      csiCode2: parsedCsiCode2
     });
     setError('');
     setIsEditModalOpen(true);
@@ -177,6 +187,21 @@ const MaterialLibraryManagement = () => {
     }
   };
 
+  const handleImportComplete = ({ imported, skipped, updated, errors }) => {
+    const parts = [];
+    if (imported > 0) parts?.push(`${imported} imported`);
+    if (updated > 0) parts?.push(`${updated} updated`);
+    if (skipped > 0) parts?.push(`${skipped} skipped (duplicate)`);
+    if (errors > 0) parts?.push(`${errors} skipped (errors)`);
+    const message = parts?.join(', ');
+    if (imported > 0 || updated > 0) {
+      toast?.success(`Import complete: ${message}`);
+    } else {
+      toast?.warning(`Import complete: ${message}`);
+    }
+    fetchMaterials();
+  };
+
   return (
     <div className="flex h-screen bg-background">
       <Sidebar 
@@ -195,10 +220,13 @@ const MaterialLibraryManagement = () => {
                   Manage your configurable material list
                 </p>
               </div>
-              <Button onClick={handleAddMaterial}>
-                <Icon name="Plus" size={18} className="mr-2" />
-                Add Material
-              </Button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <ImportExportControls onImportComplete={handleImportComplete} />
+                <Button onClick={handleAddMaterial}>
+                  <Icon name="Plus" size={18} className="mr-2" />
+                  Add Material
+                </Button>
+              </div>
             </div>
           </div>
 
@@ -473,6 +501,62 @@ const MaterialLibraryManagement = () => {
                   {error}
                 </div>
               )}
+
+              {/* 1. Category */}
+              <Select
+                label="Category"
+                options={categoryOptions?.filter(opt => opt?.value !== '')}
+                value={formData?.category}
+                onChange={(value) => setFormData({ ...formData, category: value })}
+              />
+
+              {/* 2. CSI Code Section */}
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">CSI Code</label>
+                <div className="flex items-center gap-2">
+                  {/* Auto-filled 2 digits from category */}
+                  <div className="w-20">
+                    <Input
+                      value={formData?.category?.substring(0, 2) || ''}
+                      disabled
+                      className="bg-muted text-center font-mono"
+                    />
+                  </div>
+                  <span className="text-muted-foreground">.</span>
+                  {/* Manual input box 1 */}
+                  <div className="w-20">
+                    <Input
+                      placeholder="xx"
+                      maxLength={2}
+                      value={formData?.csiCode1}
+                      onChange={(e) => {
+                        const value = e?.target?.value?.replace(/[^0-9]/g, '');
+                        setFormData({ ...formData, csiCode1: value });
+                      }}
+                      className="text-center font-mono"
+                    />
+                  </div>
+                  <span className="text-muted-foreground">.</span>
+                  {/* Manual input box 2 */}
+                  <div className="w-20">
+                    <Input
+                      placeholder="xx"
+                      maxLength={2}
+                      value={formData?.csiCode2}
+                      onChange={(e) => {
+                        const value = e?.target?.value?.replace(/[^0-9]/g, '');
+                        setFormData({ ...formData, csiCode2: value });
+                      }}
+                      className="text-center font-mono"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Format: {formData?.category?.substring(0, 2) || '00'}.{formData?.csiCode1 || 'xx'}.{formData?.csiCode2 || 'xx'}
+                </p>
+              </div>
+
+              {/* 3. Material Name */}
               <Input
                 label="Material Name"
                 placeholder="Enter material name"
@@ -480,6 +564,28 @@ const MaterialLibraryManagement = () => {
                 onChange={(e) => setFormData({ ...formData, name: e?.target?.value })}
                 required
               />
+
+              {/* 4. Unit Selection */}
+              <Select
+                label="Unit Selection"
+                options={unitOptions}
+                value={formData?.unit}
+                onChange={(value) => setFormData({ ...formData, unit: value })}
+              />
+
+              {/* 5. Unit Cost ($)* */}
+              <Input
+                label="Unit Cost ($)*"
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0.00"
+                value={formData?.unitCost}
+                onChange={(e) => setFormData({ ...formData, unitCost: e?.target?.value })}
+                required
+              />
+
+              {/* 6. Description */}
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">Description</label>
                 <textarea
@@ -490,28 +596,7 @@ const MaterialLibraryManagement = () => {
                   onChange={(e) => setFormData({ ...formData, description: e?.target?.value })}
                 />
               </div>
-              <Input
-                label="Unit Cost ($)"
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0.00"
-                value={formData?.unitCost}
-                onChange={(e) => setFormData({ ...formData, unitCost: e?.target?.value })}
-                required
-              />
-              <Select
-                label="Unit"
-                options={unitOptions}
-                value={formData?.unit}
-                onChange={(value) => setFormData({ ...formData, unit: value })}
-              />
-              <Select
-                label="Category"
-                options={categoryOptions?.filter(opt => opt?.value !== '')}
-                value={formData?.category}
-                onChange={(value) => setFormData({ ...formData, category: value })}
-              />
+
               <div className="flex gap-3 pt-4">
                 <Button
                   type="button"

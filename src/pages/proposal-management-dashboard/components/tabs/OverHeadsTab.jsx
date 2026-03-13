@@ -7,6 +7,13 @@ const USE_MEMO_CALCULATIONS = import.meta.env?.VITE_USE_MEMO_CALCULATIONS === 't
 const OverHeadsTab = ({ formData, onChange, errors }) => {
   // Legacy ref for fallback mode only
   const isUpdatingRef = useRef(false);
+  // FIX: Store onChange in a ref so the sync useEffect doesn't re-fire when the
+  // parent re-renders and recreates the onChange callback reference.
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  // FIX: Track the last value we synced to parent so we don't trigger an update
+  // when formData already reflects what we just wrote (breaks the infinite loop).
+  const lastSyncedOverheadsRef = useRef(null);
 
   // Calculate totals from Project Duration tab
   const designTotal = useMemo(() => {
@@ -104,6 +111,16 @@ const OverHeadsTab = ({ formData, onChange, errors }) => {
     if (!USE_MEMO_CALCULATIONS || !calculatedOverheads) return;
 
     const overheadCalc = formData?.overheadCalculations || {};
+
+    // FIX: Compare against the last value WE synced, not the current formData.
+    // This prevents the loop: onChange → setFormData → calculatedOverheads recomputes
+    // → useEffect fires → onChange again (because JSON.stringify of toFixed strings
+    // may differ from the stored number on each cycle).
+    const nextValue = { ...overheadCalc, ...calculatedOverheads };
+    const nextStr = JSON.stringify(nextValue);
+
+    if (lastSyncedOverheadsRef?.current === nextStr) return;
+
     let hasChanges = Object.keys(calculatedOverheads)?.some(section => {
       const current = overheadCalc?.[section] || {};
       const calculated = calculatedOverheads?.[section];
@@ -111,12 +128,10 @@ const OverHeadsTab = ({ formData, onChange, errors }) => {
     });
 
     if (hasChanges) {
-      onChange('overheadCalculations', {
-        ...overheadCalc,
-        ...calculatedOverheads
-      });
+      lastSyncedOverheadsRef.current = nextStr;
+      onChangeRef?.current('overheadCalculations', nextValue);
     }
-  }, [calculatedOverheads, onChange]);
+  }, [calculatedOverheads, formData?.overheadCalculations]);
 
   // LEGACY: Initialize Contingency fields with default 15% value (fallback mode)
   useEffect(() => {
@@ -402,9 +417,13 @@ const OverHeadsTab = ({ formData, onChange, errors }) => {
     let totalPerFt2 = 0;
 
     sections?.forEach((section) => {
-      const data = overheadCalc?.[section] || {};
-      const totalOH = DecimalMath?.parse(data?.totalOH, 0);
-      const ohPerFt2 = DecimalMath?.parse(data?.ohPerFt2, 0);
+      // Use live calculatedOverheads when available (memo mode), fall back to formData
+      const source = (USE_MEMO_CALCULATIONS && calculatedOverheads?.[section])
+        ? calculatedOverheads?.[section]
+        : (overheadCalc?.[section] || {});
+
+      const totalOH = DecimalMath?.parse(source?.totalOH, 0);
+      const ohPerFt2 = DecimalMath?.parse(source?.ohPerFt2, 0);
 
       totalOverHead = DecimalMath?.add(totalOverHead, totalOH);
       totalPerFt2 = DecimalMath?.add(totalPerFt2, ohPerFt2);
@@ -416,6 +435,11 @@ const OverHeadsTab = ({ formData, onChange, errors }) => {
   const renderOverheadSection = (title, sectionKey) => {
     const data = formData?.overheadCalculations?.[sectionKey] || {};
     const isAutoFilled = sectionKey === 'design' || sectionKey === 'procurement' || sectionKey === 'production' || sectionKey === 'general' || sectionKey === 'project';
+
+    // For display-only fields, prefer live memo values when available
+    const displayData = (USE_MEMO_CALCULATIONS && calculatedOverheads?.[sectionKey])
+      ? calculatedOverheads?.[sectionKey]
+      : data;
 
     return (
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 transition-colors mb-6">
@@ -473,7 +497,7 @@ const OverHeadsTab = ({ formData, onChange, errors }) => {
             <input
               type="number"
               placeholder="0"
-              value={data?.ohPerM2 || ''}
+              value={displayData?.ohPerM2 || ''}
               readOnly
               className="flex h-10 w-full rounded-md border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 cursor-not-allowed transition-colors" />
 
@@ -504,7 +528,7 @@ const OverHeadsTab = ({ formData, onChange, errors }) => {
             <input
               type="text"
               placeholder="0"
-              value={data?.totalOH || '0'}
+              value={displayData?.totalOH || '0'}
               readOnly
               className="flex h-10 w-full rounded-md border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 cursor-not-allowed transition-colors" />
 
@@ -519,7 +543,7 @@ const OverHeadsTab = ({ formData, onChange, errors }) => {
             <input
               type="number"
               placeholder="0"
-              value={data?.ohPerFt2 || ''}
+              value={displayData?.ohPerFt2 || ''}
               readOnly
               className="flex h-10 w-full rounded-md border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 cursor-not-allowed transition-colors" />
 

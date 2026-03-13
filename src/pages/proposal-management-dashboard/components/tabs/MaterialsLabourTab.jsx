@@ -5,6 +5,7 @@ import Select from '../../../../components/ui/Select';
 import Icon from '../../../../components/AppIcon';
 import ModuleSelectionModal from './ModuleSelectionModal';
 import ItemSearchModal from './ItemSearchModal';
+import TemplateLoadModal from './TemplateLoadModal';
 import DecimalMath from '../../../../utils/decimalMath';
 import { formatNumber } from '../../../../utils/decimalMath';
 
@@ -13,6 +14,7 @@ const USE_MEMO_CALCULATIONS = import.meta.env?.VITE_USE_MEMO_CALCULATIONS === 't
 const MaterialsLabourTab = ({ formData, onChange, errors }) => {
   const [isModuleModalOpen, setIsModuleModalOpen] = useState(false);
   const [isItemSearchModalOpen, setIsItemSearchModalOpen] = useState(false);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [currentEditingEntry, setCurrentEditingEntry] = useState(null);
   const [estimationModel, setEstimationModel] = useState('single-module');
   const [materialsLabourEntries, setMaterialsLabourEntries] = useState([]);
@@ -141,7 +143,8 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
           labour: []
         });
       }
-      entriesMap?.get(key)?.labour?.push(labour);
+      // Ensure materialId defaults to null for existing proposals (safe backward compat)
+      entriesMap?.get(key)?.labour?.push({ materialId: null, ...labour });
     });
     
     const restoredEntries = Array.from(entriesMap?.values());
@@ -384,7 +387,8 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
           role: '',
           hours: 0,
           rate: 0,
-          total: 0
+          total: 0,
+          materialId: null,
         }]
 
       };
@@ -429,7 +433,8 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
             item: '',
             hours: 0,
             rate: 0,
-            total: 0
+            total: 0,
+            materialId: null,
           }
         ]
       };
@@ -604,9 +609,10 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
     const entry = materialsLabourEntries?.find((e) => e?.id === entryId);
     if (!entry) return;
 
+    const newMatId = Date.now();
     // Add new material
     const newMaterial = {
-      id: Date.now(),
+      id: newMatId,
       no: entry?.materials?.length + 1,
       item: '',
       costPSQF: 0,
@@ -615,13 +621,14 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
       perModulePrice: 0
     };
 
-    // Add new labour
+    // Add new labour — linked to this material via materialId
     const newLabour = {
       id: Date.now() + 1,
       role: '',
       hours: 0,
       rate: 0,
-      total: 0
+      total: 0,
+      materialId: newMatId,
     };
 
     const updatedEntries = materialsLabourEntries?.map((e) => {
@@ -647,7 +654,8 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
       role: '',
       hours: 0,
       rate: 0,
-      total: 0
+      total: 0,
+      materialId: null,
     };
 
     const updatedEntries = materialsLabourEntries?.map((e) => {
@@ -699,7 +707,9 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
         const updatedMaterials = entry?.materials?.filter((m) => m?.id !== materialId);
         // Renumber materials
         const renumberedMaterials = updatedMaterials?.map((m, index) => ({ ...m, no: index + 1 }));
-        return { ...entry, materials: renumberedMaterials };
+        // Auto-delete linked labour rows
+        const updatedLabour = entry?.labour?.filter((l) => (l?.materialId ?? null) !== materialId);
+        return { ...entry, materials: renumberedMaterials, labour: updatedLabour };
       }
       return entry;
     });
@@ -718,11 +728,16 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
     setMaterialsLabourEntries(updatedEntries);
   };
 
-  const handleRemoveMaterialAndLabour = (entryId, index) => {
+  const handleRemoveMaterialAndLabour = (entryId, labourItem) => {
     const updatedEntries = materialsLabourEntries?.map((entry) => {
       if (entry?.id === entryId) {
-        // Remove the material at the specified index
-        const updatedMaterials = entry?.materials?.filter((_, i) => i !== index);
+        // Use the labour item's materialId to find the linked material
+        const linkedMatId = labourItem?.materialId ?? null;
+
+        // Remove the linked material (by materialId) if it exists
+        const updatedMaterials = linkedMatId != null
+          ? entry?.materials?.filter((m) => String(m?.id) !== String(linkedMatId))
+          : entry?.materials; // no linked material — leave materials untouched
 
         // Renumber remaining materials
         const renumberedMaterials = updatedMaterials?.map((material, idx) => ({
@@ -730,8 +745,10 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
           no: idx + 1
         }));
 
-        // Remove corresponding labour entry
-        const updatedLabour = entry?.labour?.filter((_, i) => i !== index);
+        // Remove this labour row (by its own id) AND any other labour rows linked to the same material
+        const updatedLabour = linkedMatId != null
+          ? entry?.labour?.filter((l) => String(l?.materialId ?? '') !== String(linkedMatId))
+          : entry?.labour?.filter((l) => l?.id !== labourItem?.id);
 
         return { ...entry, materials: renumberedMaterials, labour: updatedLabour };
       }
@@ -744,40 +761,122 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
   const handleRemoveEntry = (entryId) => {
     const updatedEntries = materialsLabourEntries?.filter((e) => e?.id !== entryId);
     setMaterialsLabourEntries(updatedEntries);
-    
-    // Immediately sync deletion to parent formData
-    // Transform remaining entries into flat arrays for database storage
-    const allMaterials = [];
-    const allLabour = [];
-    
-    updatedEntries?.forEach(entry => {
-      // Add materials with entry context
-      entry?.materials?.forEach(material => {
-        allMaterials?.push({
-          ...material,
-          entryId: entry?.id,
-          moduleId: entry?.moduleId,
-          moduleName: entry?.moduleName,
-          moduleAreaM2: entry?.moduleAreaM2,
-          moduleAreaFT2: entry?.moduleAreaFT2,
-          wastePercent: entry?.wastePercent
-        });
-      });
-      
-      // Add labour with entry context
-      entry?.labour?.forEach(labour => {
-        allLabour?.push({
-          ...labour,
-          entryId: entry?.id,
-          moduleId: entry?.moduleId,
-          moduleName: entry?.moduleName
-        });
-      });
+    // The sync useEffect handles writing to formData after state updates
+  };
+
+  const handleLoadFromTemplate = ({ applyOption, materialItems, labourItems, templateName }) => {
+    // Resolve the module area to use for calculations
+    // For single-module: use smallest PPVC module area (same as handleAddModel)
+    // For per-module-price: use largest module area
+    const resolvedModuleAreaFt2 = estimationModel === 'per-module-price'
+      ? (() => {
+          const modules = formData?.modules || [];
+          if (modules?.length === 0) return 0;
+          const largest = modules?.reduce((max, m) => {
+            const a = DecimalMath?.parse(m?.areaFeet, 0);
+            const b = DecimalMath?.parse(max?.areaFeet, 0);
+            return a > b ? m : max;
+          }, modules?.[0]);
+          return DecimalMath?.parse(largest?.areaFeet, 0) || 0;
+        })()
+      : getSmallestPPVCModuleAreaFt2();
+
+    // Build a map from old materialId → new materialId so labour links survive ID regeneration
+    // Capture a single timestamp so both arrays use the exact same base — prevents ID mismatch
+    const baseTime = Date.now();
+    const oldToNewMatId = {};
+    const recalcedMaterials = (applyOption === 'labour' ? [] : materialItems)?.map((m, idx) => {
+      const newId = baseTime + idx + 1;
+      // Record mapping: old template material id → new local id
+      if (m?.id != null) oldToNewMatId[m.id] = newId;
+      const costPSQF = DecimalMath?.parse(m?.costPSQF, 0);
+      const wastePercent = DecimalMath?.parse(m?.wastePercent, 5);
+      const costWastePSQF = DecimalMath?.multiply(costPSQF, 1 + wastePercent / 100);
+      const perModulePrice = resolvedModuleAreaFt2 > 0
+        ? DecimalMath?.multiply(costWastePSQF, resolvedModuleAreaFt2)
+        : DecimalMath?.parse(m?.perModulePrice, 0);
+      return { ...m, id: newId, no: idx + 1, costWastePSQF, perModulePrice };
     });
-    
-    // Update parent formData immediately to trigger auto-save
-    onChangeRef?.current('materials', allMaterials);
-    onChangeRef?.current('labour', allLabour);
+
+    // Recalculate labourCostPSQF for each labour item using resolved area
+    // Also remap materialId to the newly generated material IDs (by index position)
+    const recalcedLabour = (applyOption === 'materials' ? [] : labourItems)?.map((l, idx) => {
+      const total = DecimalMath?.parse(l?.total, 0);
+      const labourCostPSQF = resolvedModuleAreaFt2 > 0
+        ? DecimalMath?.divide(total, resolvedModuleAreaFt2)
+        : DecimalMath?.parse(l?.labourCostPSQF, 0);
+      // Remap materialId: if the old materialId has a new counterpart, use it; otherwise keep as-is
+      const remappedMaterialId = l?.materialId != null && oldToNewMatId?.[l?.materialId] != null
+        ? oldToNewMatId?.[l?.materialId]
+        : (l?.materialId ?? null);
+      return { ...l, id: baseTime + (materialItems?.length || 0) + idx + 1, labourCostPSQF, materialId: remappedMaterialId };
+    });
+
+    // If no entries exist yet, create a default entry to hold the template items
+    if (materialsLabourEntries?.length === 0) {
+      // Resolve module identity for the entry header
+      const modules = formData?.modules || [];
+      const refModule = modules?.length > 0
+        ? modules?.reduce((max, m) => {
+            const a = DecimalMath?.parse(m?.areaFeet, 0);
+            const b = DecimalMath?.parse(max?.areaFeet, 0);
+            return a > b ? m : max;
+          }, modules?.[0])
+        : null;
+
+      const newEntry = {
+        id: Date.now(),
+        moduleId: refModule?.id || null,
+        moduleName: refModule?.moduleName || templateName || 'Template Entry',
+        moduleAreaM2: refModule ? DecimalMath?.parse(refModule?.areaMm, 0) : 0,
+        moduleAreaFT2: resolvedModuleAreaFt2,
+        wastePercent: 5,
+        materials: recalcedMaterials,
+        labour: recalcedLabour,
+      };
+      setMaterialsLabourEntries([newEntry]);
+      return;
+    }
+
+    // Append to the first existing entry — additive, non-destructive
+    const targetEntry = materialsLabourEntries?.[0];
+    const existingMaterialCount = targetEntry?.materials?.length || 0;
+
+    const appendBaseTime = Date.now();
+    const appendOldToNewMatId = {};
+    const appendMaterials = recalcedMaterials?.map((m, idx) => {
+      const appendNewId = appendBaseTime + idx + 1;
+      appendOldToNewMatId[m.id] = appendNewId;
+      return { ...m, id: appendNewId, no: existingMaterialCount + idx + 1 };
+    });
+
+    // Remap materialId for appended labour to the newly generated material IDs (by index position)
+    const appendLabour = recalcedLabour?.map((l, idx) => {
+      const remappedMaterialId = l?.materialId != null && appendOldToNewMatId?.[l?.materialId] != null
+        ? appendOldToNewMatId?.[l?.materialId]
+        : (l?.materialId ?? null);
+      return {
+        ...l,
+        id: appendBaseTime + (materialItems?.length || 0) + idx + 1,
+        materialId: remappedMaterialId,
+      };
+    });
+
+    const updatedEntries = materialsLabourEntries?.map((entry, index) => {
+      if (index === 0) {
+        // Also update moduleAreaFT2 on the entry if it was 0 (e.g. entry was created before modules were added)
+        const updatedAreaFT2 = entry?.moduleAreaFT2 > 0 ? entry?.moduleAreaFT2 : resolvedModuleAreaFt2;
+        return {
+          ...entry,
+          moduleAreaFT2: updatedAreaFT2,
+          materials: [...entry?.materials, ...appendMaterials],
+          labour: [...entry?.labour, ...appendLabour],
+        };
+      }
+      return entry;
+    });
+
+    setMaterialsLabourEntries(updatedEntries);
   };
 
   return (
@@ -802,7 +901,15 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
         </div>
       </div>
       {/* Add Model Button */}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button
+          onClick={() => setIsTemplateModalOpen(true)}
+          iconName="FileDown"
+          variant="outline"
+          className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+        >
+          Load from Template
+        </Button>
         <Button
           onClick={handleAddModel}
           iconName="Plus"
@@ -927,54 +1034,70 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
                       </div>
 
                       {/* Labour Rows */}
-                      {entry?.labour?.map((labour, labourIndex) => (
-                        <div key={labour?.id} className="grid grid-cols-[1fr_80px_80px_100px_50px] gap-2 items-center py-2">
-                          <input
-                            type="text"
-                            value={labour?.role || ''}
-                            onChange={(e) => handleLabourChange(entry?.id, labour?.id, 'role', e?.target?.value)}
-                            placeholder="Role"
-                            className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 transition-colors"
-                          />
-                          <input
-                            type="number"
-                            value={labour?.hours || ''}
-                            onChange={(e) => handleLabourChange(entry?.id, labour?.id, 'hours', e?.target?.value)}
-                            placeholder="0"
-                            maxLength="4"
-                            onInput={(e) => {
-                              if (e?.target?.value?.length > 4) {
-                                e.target.value = e?.target?.value?.slice(0, 4);
-                              }
-                            }}
-                            className="px-2 py-1.5 text-sm text-right border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 transition-colors"
-                          />
-                          <input
-                            type="number"
-                            value={labour?.rate || ''}
-                            onChange={(e) => handleLabourChange(entry?.id, labour?.id, 'rate', e?.target?.value)}
-                            placeholder="0.00"
-                            maxLength="4"
-                            onInput={(e) => {
-                              if (e?.target?.value?.length > 4) {
-                                e.target.value = e?.target?.value?.slice(0, 4);
-                              }
-                            }}
-                            className="px-2 py-1.5 text-sm text-right border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 transition-colors"
-                          />
-                          <div className="px-2 py-1.5 text-sm text-right bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md transition-colors">
-                            ${formatNumber(labour?.total, 2) || '0.00'}
+                      {entry?.labour?.map((labour, labourIndex) => {
+                        // Find linked material name for visual indicator
+                        const linkedMaterial = labour?.materialId
+                          ? entry?.materials?.find((m) => m?.id === labour?.materialId)
+                          : null;
+                        return (
+                          <div key={labour?.id} className="grid grid-cols-[1fr_80px_80px_100px_50px] gap-2 items-center py-2">
+                            <div className="relative">
+                              <input
+                                type="text"
+                                value={labour?.role || ''}
+                                onChange={(e) => handleLabourChange(entry?.id, labour?.id, 'role', e?.target?.value)}
+                                placeholder="Role"
+                                className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 transition-colors w-full"
+                              />
+                              {linkedMaterial && (
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+                                  <span className="text-xs text-primary/80 truncate" title={`Linked to: ${linkedMaterial?.item || 'material'}`}>
+                                    {linkedMaterial?.item ? linkedMaterial?.item?.split(' - ')?.pop()?.substring(0, 20) : 'Linked material'}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                            <input
+                              type="number"
+                              value={labour?.hours || ''}
+                              onChange={(e) => handleLabourChange(entry?.id, labour?.id, 'hours', e?.target?.value)}
+                              placeholder="0"
+                              maxLength="4"
+                              onInput={(e) => {
+                                if (e?.target?.value?.length > 4) {
+                                  e.target.value = e?.target?.value?.slice(0, 4);
+                                }
+                              }}
+                              className="px-2 py-1.5 text-sm text-right border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 transition-colors"
+                            />
+                            <input
+                              type="number"
+                              value={labour?.rate || ''}
+                              onChange={(e) => handleLabourChange(entry?.id, labour?.id, 'rate', e?.target?.value)}
+                              placeholder="0.00"
+                              maxLength="4"
+                              onInput={(e) => {
+                                if (e?.target?.value?.length > 4) {
+                                  e.target.value = e?.target?.value?.slice(0, 4);
+                                }
+                              }}
+                              className="px-2 py-1.5 text-sm text-right border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 transition-colors"
+                            />
+                            <div className="px-2 py-1.5 text-sm text-right bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md transition-colors">
+                              ${formatNumber(labour?.total, 2) || '0.00'}
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleRemoveMaterialAndLabour(entry?.id, labour)}
+                              iconName="Trash2"
+                              iconSize={14}
+                              className="text-destructive hover:text-destructive p-1"
+                            />
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveMaterialAndLabour(entry?.id, labourIndex)}
-                            iconName="Trash2"
-                            iconSize={14}
-                            className="text-destructive hover:text-destructive p-1"
-                          />
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -1113,6 +1236,12 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
           <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">Click "Add Model" to get started</p>
         </div>
       )}
+      {/* Template Load Modal */}
+      <TemplateLoadModal
+        isOpen={isTemplateModalOpen}
+        onClose={() => setIsTemplateModalOpen(false)}
+        onApply={handleLoadFromTemplate}
+      />
       {/* Module Selection Modal */}
       <ModuleSelectionModal
         isOpen={isModuleModalOpen}

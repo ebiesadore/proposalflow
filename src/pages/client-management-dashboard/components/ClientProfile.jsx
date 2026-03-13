@@ -4,6 +4,7 @@ import Image from '../../../components/AppImage';
 import Icon from '../../../components/AppIcon';
 import Button from '../../../components/ui/Button';
 import { proposalService } from '../../../services/proposalService';
+import DocumentsTab from './DocumentsTab';
 
 const ClientProfile = ({ client, onEmailClick, onCreateProposal, onDeleteClick, onEditClick }) => {
   const navigate = useNavigate();
@@ -449,30 +450,7 @@ const ClientProfile = ({ client, onEmailClick, onCreateProposal, onDeleteClick, 
         )}
 
         {activeTab === 'documents' && (
-          <div className="space-y-4">
-            {client?.documents?.map((doc) => (
-              <div
-                key={doc?.id}
-                className="p-4 bg-muted rounded-lg hover:bg-muted/80 transition-smooth cursor-pointer"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <Icon name="FileText" size={20} className="text-primary" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-caption font-medium text-sm text-foreground truncate">
-                      {doc?.name}
-                    </h4>
-                    <div className="flex items-center gap-3 mt-1">
-                      <span className="text-xs text-muted-foreground">{doc?.size}</span>
-                      <span className="text-xs text-muted-foreground">{doc?.date}</span>
-                    </div>
-                  </div>
-                  <Button variant="ghost" size="sm" iconName="Download" />
-                </div>
-              </div>
-            ))}
-          </div>
+          <DocumentsTab client={client} />
         )}
       </div>
     </div>

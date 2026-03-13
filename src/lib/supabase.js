@@ -64,24 +64,31 @@ const supabaseStorageKey = "supabase.auth.token";
  * deadlock when the auth token refresh is in progress (triggered by
  * onAuthStateChange / INITIAL_SESSION).
  *
- * This helper reads the user directly from localStorage — the same storage
+ * This helper first reads the user directly from localStorage — the same storage
  * Supabase uses — so it is synchronous, instant, and cannot deadlock.
- * The actual JWT-based authentication still happens at the database level
- * via the Supabase client's automatic Authorization header injection.
+ * If localStorage is empty or missing (e.g. incognito, cleared storage, SSR),
+ * it falls back to supabase.auth.getSession() for graceful session recovery.
+ * Only throws "Not authenticated" after both paths fail.
  */
-export function getAuthUser() {
+export async function getAuthUser() {
     try {
         const raw = localStorage.getItem(supabaseStorageKey);
-        if (!raw) throw new Error("Not authenticated");
-
-        const parsed = JSON.parse(raw);
-        const user = parsed?.user;
-        if (!user?.id) throw new Error("Not authenticated");
-        return user;
-    } catch (e) {
-        if (e?.message === "Not authenticated") throw e;
-        throw new Error("Not authenticated");
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            const user = parsed?.user;
+            if (user?.id) return user;
+        }
+    } catch {
+        // localStorage parse failed — fall through to getSession()
     }
+
+    // Fallback: attempt session recovery via Supabase
+    const { data, error } = await supabase?.auth?.getSession();
+    if (!error && data?.session?.user?.id) {
+        return data?.session?.user;
+    }
+
+    throw new Error("Not authenticated");
 }
 
 // Export default

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import Button from '../../../../components/ui/Button';
 import Input from '../../../../components/ui/Input';
@@ -8,6 +8,11 @@ import DecimalMath from '../../../../utils/decimalMath';
 
 const CommissionTab = ({ formData, onChange, errors }) => {
   const [commissionItems, setCommissionItems] = useState([]);
+
+  // Mount guard: prevents the sync-to-parent effect from firing on the initial render
+  // with the empty [] default, which caused a spurious onChange('commissionItems', [])
+  // → setFormData → re-render → Commission flicker.
+  const commissionMountedRef = useRef(false);
 
   // Type options for dropdown
   const typeOptions = [
@@ -115,7 +120,7 @@ const CommissionTab = ({ formData, onChange, errors }) => {
 
   // Get Total Margin % from Revenue Centers
   const totalMarginPercent = useMemo(() => {
-    return parseFloat(formData?.revenueCenters?.totalMarginPercent) || 45; // Default to 45%
+    return parseFloat(formData?.revenueCenters?.totalMarginPercent) || 0; // Default to 0 (not 45 — avoids flicker between 45% and real saved value)
   }, [formData?.revenueCenters?.totalMarginPercent]);
 
   // STEP 1: Calculate Commission Total $ = (Commission %) × (Subtotal × 1.45)
@@ -138,8 +143,15 @@ const CommissionTab = ({ formData, onChange, errors }) => {
     }
   }, [formData?.commissionItems]);
 
-  // Sync commission items to parent whenever they change
+  // Sync commission items to parent whenever they change.
+  // CRITICAL: Skip the very first render — commissionItems is still the empty [] default
+  // before the async DB load completes. Without this guard, onChange fires with [] on mount,
+  // then again with the real saved items after DB load → two setFormData calls → flicker.
   useEffect(() => {
+    if (!commissionMountedRef?.current) {
+      commissionMountedRef.current = true;
+      return;
+    }
     if (onChange) {
       onChange('commissionItems', commissionItems);
     }
@@ -205,8 +217,18 @@ const CommissionTab = ({ formData, onChange, errors }) => {
     );
   };
 
-  // Auto-update Commission Total $, ft2 $, and allocatedFt2 for all Percentage type items when dependencies change
+  // Auto-update Commission Total $, ft2 $, and allocatedFt2 for all Percentage type items when dependencies change.
+  // CRITICAL: Skip the very first render — totalMarginPercent starts at 0 (default) and only
+  // gets the real saved value after DB load. Without this guard, the auto-update fires with
+  // totalMarginPercent=0 on mount → recalculates all items → setCommissionItems → sync effect
+  // fires → onChange → setFormData → then fires again with real totalMarginPercent → flicker
+  // between 45% and the real saved value (e.g. 85.8%).
+  const autoUpdateMountedRef = useRef(false);
   useEffect(() => {
+    if (!autoUpdateMountedRef?.current) {
+      autoUpdateMountedRef.current = true;
+      return;
+    }
     setCommissionItems(items =>
       items?.map(item => {
         if (item?.type === 'Percentage') {

@@ -30,45 +30,9 @@ const Sidebar = ({ isCollapsed = false, onToggleCollapse, collapsed }) => {
     },
     {
       label: 'Systems Config',
+      path: '/system-settings-and-configuration-hub',
       icon: 'Settings',
       permission: 'admin',
-      submenu: [
-        {
-          label: 'User Management',
-          path: '/user-management-and-access-control',
-          icon: 'UserCog',
-        },
-        {
-          label: 'System Settings',
-          path: '/system-settings-and-configuration-hub',
-          icon: 'Sliders',
-        },
-        {
-          label: 'Template Management',
-          path: '/proposal-template-management-studio',
-          icon: 'Layout',
-        },
-        {
-          label: 'Material Library',
-          path: '/material-library-management',
-          icon: 'Package',
-        },
-        {
-          label: 'Audit Controls',
-          path: '/audit-controls-and-compliance-monitor',
-          icon: 'Shield',
-        },
-        {
-          label: 'Additional Scope',
-          path: '/additional-scope',
-          icon: 'PlusCircle',
-        },
-        {
-          label: 'External Trade',
-          path: '/external-trade',
-          icon: 'Briefcase',
-        },
-      ],
     },
     {
       label: 'Email Center',
@@ -82,6 +46,12 @@ const Sidebar = ({ isCollapsed = false, onToggleCollapse, collapsed }) => {
       icon: 'Download',
       permission: 'user',
     },
+    {
+      label: 'Export Designer',
+      path: '/proposal-export-template-designer',
+      icon: 'FileOutput',
+      permission: 'user',
+    },
   ];
 
   const handleMobileToggle = () => {
@@ -90,10 +60,6 @@ const Sidebar = ({ isCollapsed = false, onToggleCollapse, collapsed }) => {
 
   const isActiveRoute = (path) => {
     return location?.pathname === path;
-  };
-
-  const isActiveSubmenu = (submenu) => {
-    return submenu?.some(item => location?.pathname === item?.path);
   };
 
   const closeMobileMenu = () => {
@@ -107,27 +73,22 @@ const Sidebar = ({ isCollapsed = false, onToggleCollapse, collapsed }) => {
   };
 
   const handleMouseEnter = () => {
-    // Clear any existing timeout
     if (hoverTimeoutRef?.current) {
       clearTimeout(hoverTimeoutRef?.current);
     }
-    // Set a delay before expanding (400ms for intentional hover)
     hoverTimeoutRef.current = setTimeout(() => {
       setIsHovered(true);
     }, 400);
   };
 
   const handleMouseLeave = () => {
-    // Clear the timeout if mouse leaves before delay completes
     if (hoverTimeoutRef?.current) {
       clearTimeout(hoverTimeoutRef?.current);
       hoverTimeoutRef.current = null;
     }
-    // Collapse immediately when mouse leaves
     setIsHovered(false);
   };
 
-  // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
       if (hoverTimeoutRef?.current) {
@@ -136,7 +97,6 @@ const Sidebar = ({ isCollapsed = false, onToggleCollapse, collapsed }) => {
     };
   }, []);
 
-  // Keyboard shortcut for search (Ctrl/Cmd + K)
   useEffect(() => {
     const handleKeyDown = (e) => {
       if ((e?.ctrlKey || e?.metaKey) && e?.key === 'k') {
@@ -215,68 +175,22 @@ const Sidebar = ({ isCollapsed = false, onToggleCollapse, collapsed }) => {
           <ul className="space-y-2">
             {navigationItems?.map((item) => (
               <li key={item?.label}>
-                {item?.submenu ? (
-                  <div>
-                    <div
-                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-smooth ${
-                        isActiveSubmenu(item?.submenu) ? 'bg-primary text-primary-foreground dark:bg-primary dark:text-primary-foreground' : 'text-foreground dark:text-foreground'
-                      } ${!isHovered ? 'justify-center' : ''}`}
-                    >
-                      <div className="flex-shrink-0">
-                        <Icon name={item?.icon} size={20} />
-                      </div>
-                      {isHovered && (
-                        <span className="flex-1 text-left font-caption font-medium text-sm whitespace-nowrap">
-                          {item?.label}
-                        </span>
-                      )}
-                    </div>
-                    {/* Always show Systems Config submenu items */}
-                    <ul className={`mt-2 space-y-1 transition-all duration-300 ${
-                      isHovered ? 'ml-4 opacity-100' : 'ml-0 opacity-0 h-0 overflow-hidden'
-                    }`}>
-                      {item?.submenu?.map((subItem) => (
-                        <li key={subItem?.path}>
-                          <Link
-                            to={subItem?.path}
-                            onClick={handleMenuItemClick}
-                            className={`flex items-center gap-3 px-4 py-2 rounded-lg transition-smooth hover:bg-muted dark:hover:bg-muted ${
-                              isActiveRoute(subItem?.path)
-                                ? 'bg-accent text-accent-foreground dark:bg-accent dark:text-accent-foreground'
-                                : 'text-muted-foreground dark:text-muted-foreground'
-                            }`}
-                          >
-                            <div className="flex-shrink-0">
-                              <Icon name={subItem?.icon} size={18} />
-                            </div>
-                            {isHovered && (
-                              <span className="font-caption font-medium text-sm whitespace-nowrap">
-                                {subItem?.label}
-                              </span>
-                            )}
-                          </Link>
-                        </li>
-                      ))}
-                    </ul>
+                <Link
+                  to={item?.path}
+                  onClick={handleMenuItemClick}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-smooth hover:bg-muted dark:hover:bg-muted ${
+                    isActiveRoute(item?.path)
+                      ? 'bg-primary text-primary-foreground dark:bg-primary dark:text-primary-foreground'
+                      : 'text-foreground dark:text-foreground'
+                  } ${!isHovered ? 'justify-center' : ''}`}
+                >
+                  <div className="flex-shrink-0">
+                    <Icon name={item?.icon} size={20} />
                   </div>
-                ) : (
-                  <Link
-                    to={item?.path}
-                    onClick={handleMenuItemClick}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-smooth hover:bg-muted dark:hover:bg-muted ${
-                      isActiveRoute(item?.path)
-                        ? 'bg-primary text-primary-foreground dark:bg-primary dark:text-primary-foreground'
-                        : 'text-foreground dark:text-foreground'
-                    } ${!isHovered ? 'justify-center' : ''}`}
-                  >
-                    <div className="flex-shrink-0">
-                      <Icon name={item?.icon} size={20} />
-                    </div>
-                    {isHovered && (
-                      <span className="font-caption font-medium text-sm whitespace-nowrap">{item?.label}</span>
-                    )}
-                  </Link>
-                )}
+                  {isHovered && (
+                    <span className="font-caption font-medium text-sm whitespace-nowrap">{item?.label}</span>
+                  )}
+                </Link>
               </li>
             ))}
           </ul>
