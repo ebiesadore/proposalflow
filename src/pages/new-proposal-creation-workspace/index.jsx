@@ -117,7 +117,7 @@ const NewProposalCreationWorkspace = () => {
   });
 
   // CRITICAL FIX: Keep a ref that always holds the latest formData
-  // so handleManualSave always reads the current value even if React state hasn't flushed
+  // so handleAutoSave always reads the current value even if React state hasn't flushed
   const formDataRef = useRef(formData);
   useEffect(() => {
     formDataRef.current = formData;
@@ -1388,15 +1388,9 @@ const NewProposalCreationWorkspace = () => {
       // Risk is percentage-based (not a dollar total stored per item), keep as 0
       const risk = 0;
 
-      // FIX 2: Conditionally exclude materials and labour from grandTotal when
-      // revenueType is 'chargeable' — matching Revenue Centers tab logic.
-      const revenueType = formData?.revenueCenters?.revenueType || 'chargeable';
-      const materialsForTotal = revenueType === 'chargeable' ? 0 : materials;
-      const labourForTotal = revenueType === 'chargeable' ? 0 : labour;
-
-      // Calculate Grand Total
+      // Calculate Grand Total — all cost line items always included regardless of revenue type
       const grandTotal = internalValueAdded + marginedSubContractors + zeroMarginedTotal +
-                        materialsForTotal + labourForTotal + totalOverHead + siteCostsTotal + logisticsTotal +
+                        materials + labour + totalOverHead + siteCostsTotal + logisticsTotal +
                         commission + finance + risk;
 
       setProposalTotals({
