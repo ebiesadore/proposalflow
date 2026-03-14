@@ -1,10 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import Input from '../../../../components/ui/Input';
 import Select from '../../../../components/ui/Select';
 import { Checkbox } from '../../../../components/ui/Checkbox';
 
 
-const FinancingTab = ({ formData, onChange, errors }) => {
+const FinancingTab = ({ formData, onChange, onComputedTotalChange, errors }) => {
   const bondingTypeOptions = [
     { value: 'performance', label: 'Performance' },
     { value: 'payment-performance', label: 'Payment and Performance' }
@@ -123,6 +123,21 @@ const FinancingTab = ({ formData, onChange, errors }) => {
     
     return total;
   }, [bonding?.enabled, financeCost?.enabled, costOfBond, costOfFinance]);
+
+  // PUSH ARCHITECTURE: Push financingTotal to formData.computedTotals whenever totalFinanceCosts changes
+  const lastPushedFinancingTotalRef = useRef(null);
+  useEffect(() => {
+    if (lastPushedFinancingTotalRef?.current === totalFinanceCosts) return;
+    lastPushedFinancingTotalRef.current = totalFinanceCosts;
+    if (onComputedTotalChange) {
+      onComputedTotalChange('financingTotal', totalFinanceCosts);
+    } else if (onChange) {
+      onChange('computedTotals', {
+        ...(formData?.computedTotals || {}),
+        financingTotal: totalFinanceCosts,
+      });
+    }
+  }, [totalFinanceCosts]);
 
   return (
     <div className="space-y-6">

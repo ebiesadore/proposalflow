@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 
 import Select from '../../../../components/ui/Select';
 import Button from '../../../../components/ui/Button';
 import Icon from '../../../../components/AppIcon';
 import { formatNumber } from '../../../../utils/cn';
 
-const SiteCostsTab = ({ formData, onChange, errors }) => {
+const SiteCostsTab = ({ formData, onChange, onComputedTotalChange, errors }) => {
   const [typeOptions] = useState([
     { value: 'site_manager', label: 'Site Manager' },
     { value: 'site_engineer', label: 'Site Engineer' },
@@ -74,6 +74,25 @@ const SiteCostsTab = ({ formData, onChange, errors }) => {
   const calculateGrandTotal = () => {
     return formData?.siteCosts?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
   };
+
+  // PUSH ARCHITECTURE: Compute siteCostsTotal and push to formData.computedTotals
+  const siteCostsTotal = useMemo(() => {
+    return (formData?.siteCosts || [])?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
+  }, [formData?.siteCosts]);
+
+  const lastPushedSiteCostsTotalRef = useRef(null);
+  useEffect(() => {
+    if (lastPushedSiteCostsTotalRef?.current === siteCostsTotal) return;
+    lastPushedSiteCostsTotalRef.current = siteCostsTotal;
+    if (onComputedTotalChange) {
+      onComputedTotalChange('siteCostsTotal', siteCostsTotal);
+    } else if (onChange) {
+      onChange('computedTotals', {
+        ...(formData?.computedTotals || {}),
+        siteCostsTotal,
+      });
+    }
+  }, [siteCostsTotal]);
 
   return (
     <div className="space-y-6">

@@ -6,7 +6,7 @@ import Select from '../../../../components/ui/Select';
 import { formatNumber } from '../../../../utils/cn';
 import DecimalMath from '../../../../utils/decimalMath';
 
-const CommissionTab = ({ formData, onChange, errors }) => {
+const CommissionTab = ({ formData, onChange, onComputedTotalChange, errors }) => {
   const [commissionItems, setCommissionItems] = useState([]);
 
   // Mount guard: prevents the sync-to-parent effect from firing on the initial render
@@ -267,6 +267,25 @@ const CommissionTab = ({ formData, onChange, errors }) => {
   const totalPercentage = commissionItems?.filter(item => item?.type === 'Percentage')?.reduce((sum, item) => sum + (parseFloat(item?.percentage) || 0), 0);
 
   const siteCostTotal = commissionItems?.reduce((sum, item) => sum + (item?.total || 0), 0);
+
+  // PUSH ARCHITECTURE: Compute commissionTotal and push to formData.computedTotals
+  const commissionTotal = useMemo(() => {
+    return commissionItems?.reduce((sum, item) => sum + (parseFloat(item?.total) || 0), 0);
+  }, [commissionItems]);
+
+  const lastPushedCommissionTotalRef = useRef(null);
+  useEffect(() => {
+    if (lastPushedCommissionTotalRef?.current === commissionTotal) return;
+    lastPushedCommissionTotalRef.current = commissionTotal;
+    if (onComputedTotalChange) {
+      onComputedTotalChange('commissionTotal', commissionTotal);
+    } else if (onChange) {
+      onChange('computedTotals', {
+        ...(formData?.computedTotals || {}),
+        commissionTotal,
+      });
+    }
+  }, [commissionTotal]);
 
   return (
     <div className="space-y-6">

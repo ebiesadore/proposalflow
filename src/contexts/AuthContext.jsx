@@ -60,14 +60,43 @@ export const AuthProvider = ({ children }) => {
                 if (event === "TOKEN_REFRESHED") return;
 
                 if (event === "TOKEN_REFRESH_FAILED") {
-                    console.warn("[AuthContext] Token refresh failed — signing out and redirecting to login");
-                    if (mounted) setUser(null);
-                    try {
-                        await supabase?.auth?.signOut();
-                    } catch {
-                        // ignore sign-out errors during refresh failure
-                    }
-                    window.location.href = "/login-and-authentication-portal";
+                    console.warn("[AuthContext] Token refresh failed — attempting retries before signing out");
+
+                    let retryCount = 0;
+                    const maxRetries = 3;
+                    const retryDelay = 2000; // 2 seconds between retries
+
+                    const attemptRefresh = async () => {
+                        if (!mounted) return;
+                        retryCount++;
+                        console.log(`[AuthContext] Token refresh retry ${retryCount}/${maxRetries}...`);
+                        try {
+                            const { data, error } = await supabase?.auth?.refreshSession();
+                            if (!error && data?.session) {
+                                console.log("[AuthContext] Token refresh retry succeeded on attempt", retryCount);
+                                if (mounted) setUser(data?.session?.user);
+                                return; // success — do not sign out
+                            }
+                            throw error || new Error("No session returned");
+                        } catch (err) {
+                            console.warn(`[AuthContext] Retry ${retryCount} failed:`, err?.message);
+                            if (retryCount < maxRetries) {
+                                setTimeout(attemptRefresh, retryDelay);
+                            } else {
+                                console.warn("[AuthContext] All retries exhausted — signing out and redirecting to login");
+                                if (mounted) setUser(null);
+                                try {
+                                    await supabase?.auth?.signOut();
+                                } catch {
+                                    // ignore sign-out errors during refresh failure
+                                }
+                                window.location.href = "/login-and-authentication-portal";
+                            }
+                        }
+                    };
+
+                    // Start first retry after initial delay
+                    setTimeout(attemptRefresh, retryDelay);
                     return;
                 }
 

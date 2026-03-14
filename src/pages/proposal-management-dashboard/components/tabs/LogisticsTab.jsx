@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Input from '../../../../components/ui/Input';
 import { formatNumber } from '../../../../utils/cn';
 
-const LogisticsTab = ({ formData, onChange, errors }) => {
+const LogisticsTab = ({ formData, onChange, onComputedTotalChange, errors }) => {
   const [laydown, setLaydown] = useState({
     noWeeks: '',
     noUnits: '',
@@ -152,6 +152,21 @@ const LogisticsTab = ({ formData, onChange, errors }) => {
     const total = (laydown?.total || 0) + (local?.total || 0) + (destination1?.total || 0) + (destination2?.total || 0);
     setTotalLogistics(prev => prev !== total ? total : prev);
   }, [laydown?.total, local?.total, destination1?.total, destination2?.total]);
+
+  // PUSH ARCHITECTURE: Push logisticsTotal to formData.computedTotals whenever totalLogistics changes
+  const lastPushedLogisticsTotalRef = useRef(null);
+  useEffect(() => {
+    if (lastPushedLogisticsTotalRef?.current === totalLogistics) return;
+    lastPushedLogisticsTotalRef.current = totalLogistics;
+    if (onComputedTotalChange) {
+      onComputedTotalChange('logisticsTotal', totalLogistics);
+    } else if (onChange) {
+      onChange('computedTotals', {
+        ...(formData?.computedTotals || {}),
+        logisticsTotal: totalLogistics,
+      });
+    }
+  }, [totalLogistics]);
 
   // Sync to parent - debounced to prevent excessive updates
   useEffect(() => {

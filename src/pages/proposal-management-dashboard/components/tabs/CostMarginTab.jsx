@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Input from '../../../../components/ui/Input';
 import Icon from '../../../../components/AppIcon';
 import Button from '../../../../components/ui/Button';
@@ -11,7 +11,7 @@ import { formatNumber } from '../../../../utils/decimalMath';
 
 const USE_MEMO_CALCULATIONS = import.meta.env?.VITE_USE_MEMO_CALCULATIONS === 'true';
 
-const CostMarginTab = ({ formData, onChange, errors }) => {
+const CostMarginTab = ({ formData, onChange, onComputedTotalChange, errors }) => {
   const [lineItems, setLineItems] = useState([]);
   const [isScopeSearchOpen, setIsScopeSearchOpen] = useState(false);
   const [selectedLineIndex, setSelectedLineIndex] = useState(null);
@@ -101,6 +101,26 @@ const CostMarginTab = ({ formData, onChange, errors }) => {
   const { productionTotal, sellTotal, productionPercentage, sellPercentage } = internalValueTotals;
   const { contractedTotal, subContractorSellTotal, contractedPercentage, subContractorSellPercentage } = subContractorTotals;
   const { zeroMarginProductionTotal, zeroMarginSellTotal, zeroMarginProductionPercentage, zeroMarginSellPercentage } = zeroMarginTotals;
+
+  // PUSH ARCHITECTURE: Push internalValueAdded, marginedSubContractors, zeroMarginedSupply totals to formData.computedTotals
+  const lastPushedCostMarginRef = useRef(null);
+  useEffect(() => {
+    const key = `${productionTotal}|${contractedTotal}|${zeroMarginProductionTotal}`;
+    if (lastPushedCostMarginRef?.current === key) return;
+    lastPushedCostMarginRef.current = key;
+    if (onComputedTotalChange) {
+      onComputedTotalChange('internalValueAddedTotal', productionTotal);
+      onComputedTotalChange('marginedSubContractorsTotal', contractedTotal);
+      onComputedTotalChange('zeroMarginedSupplyTotal', zeroMarginProductionTotal);
+    } else if (onChange) {
+      onChange('computedTotals', {
+        ...(formData?.computedTotals || {}),
+        internalValueAddedTotal: productionTotal,
+        marginedSubContractorsTotal: contractedTotal,
+        zeroMarginedSupplyTotal: zeroMarginProductionTotal,
+      });
+    }
+  }, [productionTotal, contractedTotal, zeroMarginProductionTotal]);
 
   const handleAddScope = () => {
     const newLineItem = {

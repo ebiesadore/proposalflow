@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import Button from '../../../../components/ui/Button';
 import Icon from '../../../../components/AppIcon';
 import AddModuleModal from '../AddModuleModal';
@@ -7,7 +7,7 @@ import DecimalMath from '../../../../utils/decimalMath';
 
 const USE_MEMO_CALCULATIONS = import.meta.env?.VITE_USE_MEMO_CALCULATIONS === 'true';
 
-const ModularBuildUpTab = ({ formData, onChange, errors }) => {
+const ModularBuildUpTab = ({ formData, onChange, onComputedTotalChange, errors }) => {
   const [isAddModuleModalOpen, setIsAddModuleModalOpen] = useState(false);
   const [selectedModules, setSelectedModules] = useState([]);
   const [editingModule, setEditingModule] = useState(null);
@@ -111,6 +111,32 @@ const ModularBuildUpTab = ({ formData, onChange, errors }) => {
       return sum + modTotalPrice;
     }, 0);
   };
+
+  // PUSH ARCHITECTURE: Compute budgetValue via useMemo and push to formData.computedTotals
+  const budgetValueMemo = useMemo(() => {
+    return (formData?.modules || [])?.reduce((sum, m) => {
+      const quantity = DecimalMath?.parse(m?.quantity, 0);
+      const costPerUnit = DecimalMath?.parse(m?.costPerUnit, 0);
+      const areaFt2 = DecimalMath?.parse(m?.areaFeet, 0);
+      const modUnitRate = DecimalMath?.multiply(costPerUnit, areaFt2);
+      const modTotalPrice = DecimalMath?.multiply(modUnitRate, quantity);
+      return sum + modTotalPrice;
+    }, 0);
+  }, [formData?.modules]);
+
+  const lastPushedBudgetValueRef = useRef(null);
+  useEffect(() => {
+    if (lastPushedBudgetValueRef?.current === budgetValueMemo) return;
+    lastPushedBudgetValueRef.current = budgetValueMemo;
+    if (onComputedTotalChange) {
+      onComputedTotalChange('budgetValue', budgetValueMemo);
+    } else if (onChange) {
+      onChange('computedTotals', {
+        ...(formData?.computedTotals || {}),
+        budgetValue: budgetValueMemo,
+      });
+    }
+  }, [budgetValueMemo]);
 
   const calculateCategoryTotals = () => {
     const categoryTotals = {};

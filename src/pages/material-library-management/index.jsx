@@ -220,13 +220,6 @@ const MaterialLibraryManagement = () => {
                   Manage your configurable material list
                 </p>
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <ImportExportControls onImportComplete={handleImportComplete} />
-                <Button onClick={handleAddMaterial}>
-                  <Icon name="Plus" size={18} className="mr-2" />
-                  Add Material
-                </Button>
-              </div>
             </div>
           </div>
 
@@ -240,6 +233,15 @@ const MaterialLibraryManagement = () => {
               { label: 'Materials', path: '/material-library-management' },
             ]}
           />
+
+          <div className="max-w-[1600px] mx-auto">
+            <div className="mt-4 mb-6 flex items-center justify-end gap-3">
+              <ImportExportControls onImportComplete={handleImportComplete} />
+              <Button className="flex items-center gap-2" onClick={handleAddMaterial}>
+                <Icon name="Plus" size={18} />
+                Add Material
+              </Button>
+            </div>
 
           <div className="bg-background border border-border rounded-lg">
             <div className="p-6 border-b border-border">
@@ -347,6 +349,7 @@ const MaterialLibraryManagement = () => {
                 </table>
               </div>
             )}
+          </div>
           </div>
         </div>
       </div>

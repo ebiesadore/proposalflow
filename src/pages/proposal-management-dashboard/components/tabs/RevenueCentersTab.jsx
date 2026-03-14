@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { formatNumber } from '../../../../utils/cn';
-import { DecimalMath } from '../../../../utils/decimalMath';
+
 
 const USE_MEMO_CALCULATIONS = import.meta.env?.VITE_USE_MEMO_CALCULATIONS === 'true';
 
@@ -13,15 +13,8 @@ const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => 
     const items = [];
     let idCounter = 1;
 
-    // 1. Module Configuration > Budget Value
-    const budgetValue = formData?.modules?.reduce((sum, m) => {
-      const quantity = parseFloat(m?.quantity) || 0;
-      const costPerUnit = parseFloat(m?.costPerUnit) || 0;
-      const areaFt2 = parseFloat(m?.areaFeet) || 0;
-      const modUnitRate = costPerUnit * areaFt2;
-      const modTotalPrice = modUnitRate * quantity;
-      return sum + modTotalPrice;
-    }, 0) || 0;
+    // 1. Module Configuration > Budget Value - PUSH ARCHITECTURE: read from formData.computedTotals
+    const budgetValue = parseFloat(formData?.computedTotals?.budgetValue) || 0;
 
     if (budgetValue > 0) {
       items?.push({
@@ -45,11 +38,8 @@ const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => 
       }
     });
 
-    // 3. Site Cost Total
-    const siteCostTotal = formData?.siteCosts?.reduce((sum, item) => {
-      const total = parseFloat(item?.total) || 0;
-      return sum + total;
-    }, 0) || 0;
+    // 3. Site Cost Total - PUSH ARCHITECTURE: read from formData.computedTotals
+    const siteCostTotal = parseFloat(formData?.computedTotals?.siteCostsTotal) || 0;
 
     if (siteCostTotal > 0) {
       items?.push({
@@ -61,29 +51,9 @@ const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => 
     }
 
     // CRITICAL FIX: Only include Materials Total and Labour Total in Cost + Margin mode
-    // Chargeable mode = sale price-based (what you charge customers)
-    // Cost + Margin mode = cost price-based (cost to build + margin)
     if (revenueType === 'cost-margin') {
-      // 4. Materials Total - Only in Cost + Margin mode
-      const materialsTotal = (() => {
-        // Get total area from Modular Build Up (in Ft²)
-        const modules = formData?.modules || [];
-        const totalAreaFt2 = modules?.reduce((sum, m) => {
-          const quantity = parseFloat(m?.quantity) || 0;
-          const areaFt2 = parseFloat(m?.areaFeet) || 0;
-          return sum + (quantity * areaFt2);
-        }, 0);
-
-        // Calculate $ / Ft² / W Total (sum of all costWastePSQF)
-        const materials = formData?.materials || [];
-        const costPerSqFtTotal = materials?.reduce((sum, item) => {
-          const costWastePSQF = parseFloat(item?.costWastePSQF) || 0;
-          return sum + costWastePSQF;
-        }, 0);
-
-        // Project Mod Total = costPerSqFtTotal × totalAreaFt2
-        return costPerSqFtTotal * totalAreaFt2;
-      })();
+      // 4. Materials Total - PUSH ARCHITECTURE: read from formData.computedTotals
+      const materialsTotal = parseFloat(formData?.computedTotals?.materialsTotal) || 0;
 
       if (materialsTotal > 0) {
         items?.push({
@@ -94,17 +64,14 @@ const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => 
         });
       }
 
-      // 5. Labour Total - Only in Cost + Margin mode
-      const labourTotal = (formData?.labour || [])?.reduce((sum, item) => {
-        const total = parseFloat(item?.total) || 0;
-        return sum + total;
-      }, 0) || 0;
+      // 5. Labour Total - PUSH ARCHITECTURE: read from formData.computedTotals
+      const labourTotal = parseFloat(formData?.computedTotals?.labourTotal) || 0;
 
       if (labourTotal > 0) {
         items?.push({
           id: idCounter++,
           item: 'Labour Total',
-          description: 'Total labour costs',
+          description: 'Total labour costs (Project Mod Total)',
           amount: labourTotal
         });
       }
@@ -116,7 +83,7 @@ const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => 
     }
 
     return items;
-  }, [formData?.modules, formData?.internalValueAddedScope, formData?.siteCosts, formData?.materials, formData?.labour, revenueType]);
+  }, [formData?.computedTotals, formData?.internalValueAddedScope, revenueType]);
 
   // Auto-generate Sub Contracted data from Margined Sub-Contractors
   const generateSubContractedData = useMemo(() => {
@@ -230,55 +197,27 @@ const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => 
 
   // Calculate totals from Materials + Labour
   const calculateMaterialsTotal = useMemo(() => {
-    // Get total area from Modular Build Up (in Ft²)
-    const modules = formData?.modules || [];
-    const totalAreaFt2 = modules?.reduce((sum, m) => {
-      const quantity = DecimalMath?.parse(m?.quantity, 0);
-      const areaFt2 = DecimalMath?.parse(m?.areaFeet, 0) || DecimalMath?.divide(DecimalMath?.parse(m?.areaMM, 0), 0.092903);
-      return sum + DecimalMath?.multiply(quantity, areaFt2);
-    }, 0);
-
-    // Calculate Project Mod Total: ($ / Ft² / W Total) × Total Area
-    const materials = formData?.materials || [];
-    const costPerSqFtTotal = materials?.reduce((sum, item) => {
-      const costWastePSQF = DecimalMath?.parse(item?.costWastePSQF, 0);
-      return sum + costWastePSQF;
-    }, 0);
-
-    // Project Mod Total = costPerSqFtTotal × totalAreaFt2
-    return DecimalMath?.multiply(costPerSqFtTotal, totalAreaFt2);
-  }, [formData?.materials, formData?.modules]);
+    // PUSH ARCHITECTURE: Read from formData.computedTotals pushed by MaterialsLabourTab
+    return parseFloat(formData?.computedTotals?.materialsTotal) || 0;
+  }, [formData?.computedTotals?.materialsTotal]);
 
   const calculateLabourTotal = useMemo(() => {
-    const labour = formData?.labour || [];
-    return labour?.reduce((sum, item) => {
-      const total = parseFloat(item?.total) || 0;
-      return sum + total;
-    }, 0);
-  }, [formData?.labour]);
+    // PUSH ARCHITECTURE: Read from formData.computedTotals pushed by MaterialsLabourTab
+    return parseFloat(formData?.computedTotals?.labourTotal) || 0;
+  }, [formData?.computedTotals?.labourTotal]);
 
   // Calculate total from Over Heads
   const calculateOverheadsTotal = useMemo(() => {
-    const overheadCalc = formData?.overheadCalculations || {};
-    const sections = ['design', 'procurement', 'general', 'production', 'project'];
-    
-    return sections?.reduce((sum, section) => {
-      const data = overheadCalc?.[section] || {};
-      const totalOH = parseFloat(data?.totalOH) || 0;
-      return sum + totalOH;
-    }, 0);
-  }, [formData?.overheadCalculations]);
+    // PUSH ARCHITECTURE: Read from formData.computedTotals pushed by OverHeadsTab
+    return parseFloat(formData?.computedTotals?.overheadsTotal) || 0;
+  }, [formData?.computedTotals?.overheadsTotal]);
 
-  // Calculate Site Works Costs total
+  // Calculate Site Works Costs total - PUSH ARCHITECTURE: read from formData.computedTotals
   const calculateSiteWorksTotal = useMemo(() => {
-    const siteCosts = formData?.siteCosts || [];
-    return siteCosts?.reduce((sum, item) => {
-      const total = parseFloat(item?.total) || 0;
-      return sum + total;
-    }, 0);
-  }, [formData?.siteCosts]);
+    return parseFloat(formData?.computedTotals?.siteCostsTotal) || 0;
+  }, [formData?.computedTotals?.siteCostsTotal]);
 
-  // Calculate Logistics totals
+  // Calculate Logistics totals - read from stored logistics sub-totals (already pushed by LogisticsTab)
   const calculateLaydownTotal = useMemo(() => {
     const logistics = formData?.logistics || [];
     if (logistics?.length > 0) {
@@ -311,51 +250,28 @@ const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => 
     return 0;
   }, [formData?.logistics]);
 
-  // Calculate Commission total
+  // Calculate Commission total - PUSH ARCHITECTURE: read from formData.computedTotals
   const calculateCommissionTotal = useMemo(() => {
-    const commissionItems = formData?.commissionItems || [];
-    return commissionItems?.reduce((sum, item) => {
-      return sum + (parseFloat(item?.total) || 0);
-    }, 0);
-  }, [formData?.commissionItems]);
+    return parseFloat(formData?.computedTotals?.commissionTotal) || 0;
+  }, [formData?.computedTotals?.commissionTotal]);
 
-  // Calculate Financing cost
+  // Calculate Financing cost - PUSH ARCHITECTURE: read from formData.computedTotals
   const calculateFinancingCost = useMemo(() => {
-    const financing = formData?.financing || {};
-    const financingOptions = financing?.options || [];
-    
-    return financingOptions?.reduce((sum, option) => {
-      const amount = parseFloat(option?.amount) || 0;
-      const interestRate = parseFloat(option?.interestRate) || 0;
-      const term = parseFloat(option?.term) || 0;
-      
-      // Simple interest calculation: amount * (interestRate/100) * term
-      const financingCost = amount * (interestRate / 100) * term;
-      return sum + financingCost;
-    }, 0);
-  }, [formData?.financing]);
+    return parseFloat(formData?.computedTotals?.financingTotal) || 0;
+  }, [formData?.computedTotals?.financingTotal]);
 
-  // Calculate Additional Scope totals
+  // Calculate Additional Scope totals - PUSH ARCHITECTURE: read from formData.computedTotals
   const calculateInternalValueAddedTotal = useMemo(() => {
-    const internalValueAddedScope = formData?.internalValueAddedScope || [];
-    return internalValueAddedScope?.reduce((sum, item) => {
-      return sum + (parseFloat(item?.productionCost) || 0);
-    }, 0);
-  }, [formData?.internalValueAddedScope]);
+    return parseFloat(formData?.computedTotals?.internalValueAddedTotal) || 0;
+  }, [formData?.computedTotals?.internalValueAddedTotal]);
 
   const calculateMarginedSubContractorsTotal = useMemo(() => {
-    const marginedSubContractors = formData?.marginedSubContractors || [];
-    return marginedSubContractors?.reduce((sum, item) => {
-      return sum + (parseFloat(item?.contractedCost) || 0);
-    }, 0);
-  }, [formData?.marginedSubContractors]);
+    return parseFloat(formData?.computedTotals?.marginedSubContractorsTotal) || 0;
+  }, [formData?.computedTotals?.marginedSubContractorsTotal]);
 
   const calculateZeroMarginedSupplyTotal = useMemo(() => {
-    const zeroMarginedSupply = formData?.zeroMarginedSupply || [];
-    return zeroMarginedSupply?.reduce((sum, item) => {
-      return sum + (parseFloat(item?.productionCost) || 0);
-    }, 0);
-  }, [formData?.zeroMarginedSupply]);
+    return parseFloat(formData?.computedTotals?.zeroMarginedSupplyTotal) || 0;
+  }, [formData?.computedTotals?.zeroMarginedSupplyTotal]);
 
   // Auto-generate Cost + Margin data from all sources
   const costMarginData = useMemo(() => {
@@ -687,10 +603,14 @@ const RevenueCentersTab = ({ formData, onChange, errors, isProposalLoaded }) => 
         totalMarginPercent
       };
       
-      // Single onChange call — covers persist + grandTotal in one setFormData update
+      // FIX 1: Single onChange call — only persist revenueType, marginPercentages,
+      // totalMarginPercent, and grandTotal. chargeableData is intentionally excluded
+      // because it is a computed view of source columns (modules, materials, labour, etc.)
+      // and is recomputed on every render. Storing it in the DB doubles the payload size.
       onChange('revenueCenters', {
         ...formDataRevenueCentersRef?.current,
-        chargeableData: currentChargeableData,
+        // Explicitly omit chargeableData — strip it if it was previously stored
+        chargeableData: undefined,
         marginPercentages,
         totalMarginPercent,
         revenueType,

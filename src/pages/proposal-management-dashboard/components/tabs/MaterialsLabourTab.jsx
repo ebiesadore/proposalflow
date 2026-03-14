@@ -11,7 +11,7 @@ import { formatNumber } from '../../../../utils/decimalMath';
 
 const USE_MEMO_CALCULATIONS = import.meta.env?.VITE_USE_MEMO_CALCULATIONS === 'true';
 
-const MaterialsLabourTab = ({ formData, onChange, errors }) => {
+const MaterialsLabourTab = ({ formData, onChange, onComputedTotalChange, errors }) => {
   const [isModuleModalOpen, setIsModuleModalOpen] = useState(false);
   const [isItemSearchModalOpen, setIsItemSearchModalOpen] = useState(false);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
@@ -209,6 +209,68 @@ const MaterialsLabourTab = ({ formData, onChange, errors }) => {
     onChangeRef?.current('labour', flattenedData?.allLabour);
     onChangeRef?.current('estimationModel', estimationModel);
   }, [flattenedData, estimationModel]);
+
+  // PUSH ARCHITECTURE: Compute materialsTotal and labourTotal (Project Mod Total values)
+  // and push them into formData.computedTotals so downstream tabs can read without recalculating.
+  const computedMaterialsTotal = useMemo(() => {
+    const materials = formData?.materials || [];
+    const modules = formData?.modules || [];
+
+    const totalAreaFt2 = modules?.reduce((sum, m) => {
+      const quantity = DecimalMath?.parse(m?.quantity, 0);
+      const areaFt2 = DecimalMath?.parse(m?.areaFeet, 0);
+      return sum + DecimalMath?.multiply(quantity, areaFt2);
+    }, 0);
+
+    const costPerSqFtTotal = materials?.reduce((sum, item) => {
+      return sum + DecimalMath?.parse(item?.costWastePSQF, 0);
+    }, 0);
+
+    return DecimalMath?.multiply(costPerSqFtTotal, totalAreaFt2);
+  }, [formData?.materials, formData?.modules]);
+
+  const computedLabourTotal = useMemo(() => {
+    const labour = formData?.labour || [];
+    const modules = formData?.modules || [];
+
+    const labourRawTotal = labour?.reduce((sum, item) => {
+      return sum + DecimalMath?.parse(item?.total, 0);
+    }, 0);
+
+    const totalAreaFt2 = modules?.reduce((sum, m) => {
+      const quantity = DecimalMath?.parse(m?.quantity, 0);
+      const areaFt2 = DecimalMath?.parse(m?.areaFeet, 0);
+      return sum + DecimalMath?.multiply(quantity, areaFt2);
+    }, 0);
+
+    const smallestModuleAreaFt2 = getSmallestPPVCModuleAreaFt2();
+    const labourCostPSQF = smallestModuleAreaFt2 > 0
+      ? DecimalMath?.divide(labourRawTotal, smallestModuleAreaFt2)
+      : 0;
+
+    return DecimalMath?.multiply(labourCostPSQF, totalAreaFt2);
+  }, [formData?.labour, formData?.modules]);
+
+  // Track last pushed computedTotals to avoid infinite loops
+  const lastPushedComputedTotalsRef = useRef(null);
+
+  useEffect(() => {
+    const next = JSON.stringify({ materialsTotal: computedMaterialsTotal, labourTotal: computedLabourTotal });
+    if (lastPushedComputedTotalsRef?.current === next) return;
+    lastPushedComputedTotalsRef.current = next;
+
+    if (onComputedTotalChange) {
+      onComputedTotalChange('materialsTotal', computedMaterialsTotal);
+      onComputedTotalChange('labourTotal', computedLabourTotal);
+    } else {
+      const existing = formData?.computedTotals || {};
+      onChangeRef?.current('computedTotals', {
+        ...existing,
+        materialsTotal: computedMaterialsTotal,
+        labourTotal: computedLabourTotal
+      });
+    }
+  }, [computedMaterialsTotal, computedLabourTotal]);
 
   // NEW: Recalculate Per Module Price when modules change (dynamic recalculation)
   useEffect(() => {

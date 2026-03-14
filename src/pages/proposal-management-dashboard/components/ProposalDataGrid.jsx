@@ -264,7 +264,7 @@ const ProposalDataGrid = ({
   const columns = [
     { key: 'id', label: 'Project No.', sortable: true, width: 'w-20' },
     { key: 'client', label: 'Client', sortable: true, width: 'w-40' },
-    { key: 'title', label: 'Project Name', sortable: true, width: 'w-64' },
+    { key: 'title', label: 'Project Name', sortable: true, width: 'w-40' },
     { key: 'status', label: 'Status', sortable: true, width: 'w-32' },
     { key: 'projectType', label: 'Project Type', sortable: true, width: 'w-32' },
     { key: 'program', label: 'Program', sortable: true, width: 'w-28' },
@@ -327,7 +327,7 @@ const ProposalDataGrid = ({
                     {proposal?.project_number || proposal?.id}
                   </span>
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-4 py-4 whitespace-nowrap">
                   <div className="flex items-center gap-3">
                     {logoUrls?.[proposal?.client?.id] ? (
                       <img 

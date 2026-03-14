@@ -4,7 +4,7 @@ import { formatNumber } from '../../../../utils/decimalMath';
 
 const USE_MEMO_CALCULATIONS = import.meta.env?.VITE_USE_MEMO_CALCULATIONS === 'true';
 
-const OverHeadsTab = ({ formData, onChange, errors }) => {
+const OverHeadsTab = ({ formData, onChange, onComputedTotalChange, errors }) => {
   // Legacy ref for fallback mode only
   const isUpdatingRef = useRef(false);
   // FIX: Store onChange in a ref so the sync useEffect doesn't re-fire when the
@@ -132,6 +132,46 @@ const OverHeadsTab = ({ formData, onChange, errors }) => {
       onChangeRef?.current('overheadCalculations', nextValue);
     }
   }, [calculatedOverheads, formData?.overheadCalculations]);
+
+  // PUSH ARCHITECTURE: Compute overheadsTotal (grand total across all 5 sections)
+  // and push it into formData.computedTotals so downstream tabs can read without recalculating.
+  const computedOverheadsTotal = useMemo(() => {
+    const sections = ['design', 'procurement', 'general', 'production', 'project'];
+
+    if (USE_MEMO_CALCULATIONS && calculatedOverheads) {
+      // Use live memo values when available
+      return sections?.reduce((sum, section) => {
+        const totalOH = DecimalMath?.parse(calculatedOverheads?.[section]?.totalOH, 0);
+        return DecimalMath?.add(sum, totalOH);
+      }, 0);
+    }
+
+    // Fallback: read from stored formData
+    const overheadCalc = formData?.overheadCalculations || {};
+    return sections?.reduce((sum, section) => {
+      const totalOH = DecimalMath?.parse(overheadCalc?.[section]?.totalOH, 0);
+      return DecimalMath?.add(sum, totalOH);
+    }, 0);
+  }, [calculatedOverheads, formData?.overheadCalculations]);
+
+  // Track last pushed overheadsTotal to avoid infinite loops
+  const lastPushedOverheadsTotalRef = useRef(null);
+
+  useEffect(() => {
+    const next = String(computedOverheadsTotal);
+    if (lastPushedOverheadsTotalRef?.current === next) return;
+    lastPushedOverheadsTotalRef.current = next;
+
+    if (onComputedTotalChange) {
+      onComputedTotalChange('overheadsTotal', computedOverheadsTotal);
+    } else {
+      const existing = formData?.computedTotals || {};
+      onChangeRef?.current('computedTotals', {
+        ...existing,
+        overheadsTotal: computedOverheadsTotal
+      });
+    }
+  }, [computedOverheadsTotal]);
 
   // LEGACY: Initialize Contingency fields with default 15% value (fallback mode)
   useEffect(() => {

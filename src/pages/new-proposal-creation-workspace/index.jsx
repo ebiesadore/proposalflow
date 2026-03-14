@@ -44,6 +44,13 @@ const NewProposalCreationWorkspace = () => {
   const autoSaveTimerRef = useRef(null);
   // Ref to track autoSaveStatus synchronously — avoids stale closure in handleAutoSave guard
   const autoSaveStatusRef = useRef('unsaved');
+  // FIX 2: Concurrent save guard — true while a save network request is in flight
+  const saveInFlightRef = useRef(false);
+  // FIX 3: Dirty flag ref — set to true when formData changes, cleared after save fires.
+  // The auto-save timer depends on this ref instead of formData so the 30-second
+  // countdown is NOT reset on every keystroke; it only resets when the dirty flag
+  // transitions from false → true (i.e. the first change after a clean state).
+  const isDirtyRef = useRef(false);
   const [isLoadingProposal, setIsLoadingProposal] = useState(false);
   // Add this block - Missing saveTimeoutRef declaration
   const saveTimeoutRef = useRef(null);
@@ -110,7 +117,7 @@ const NewProposalCreationWorkspace = () => {
   });
 
   // CRITICAL FIX: Keep a ref that always holds the latest formData
-  // so handleManualSave reads the current value even if React state hasn't flushed
+  // so handleManualSave always reads the current value even if React state hasn't flushed
   const formDataRef = useRef(formData);
   useEffect(() => {
     formDataRef.current = formData;
@@ -588,13 +595,75 @@ const NewProposalCreationWorkspace = () => {
     return Math.round((filledFields / totalFields) * 100);
   }, [formData]);
 
+  // Calculate Revenue Centers Grand Total (Chargeable)
+  // NOTE: Defined here (before calculateChargeableValue) so calculateChargeableValue can reference it.
+  const calculateRevenueCentersGrandTotal = useCallback(() => {
+    console.log('=== calculateRevenueCentersGrandTotal START ===');
+    
+    // Get revenue type to determine if we should include Materials and Labour
+    const revenueType = formData?.revenueCenters?.revenueType || 'chargeable';
+    console.log('Revenue Type:', revenueType);
+
+    // PUSH ARCHITECTURE: Read budgetValue from formData.computedTotals (pushed by ModularBuildUpTab)
+    const budgetValue = parseFloat(formData?.computedTotals?.budgetValue) || 0;
+    console.log('Budget Value (from computedTotals):', budgetValue);
+
+    // PUSH ARCHITECTURE: Read internalValueAddedTotal from formData.computedTotals (pushed by CostMarginTab)
+    const internalValueAddedTotal = parseFloat(formData?.computedTotals?.internalValueAddedTotal) || 0;
+    console.log('Internal Value-Added Total (from computedTotals):', internalValueAddedTotal);
+
+    // PUSH ARCHITECTURE: Read siteCostsTotal from formData.computedTotals (pushed by SiteCostsTab)
+    const siteCostTotal = parseFloat(formData?.computedTotals?.siteCostsTotal) || 0;
+    console.log('Site Cost Total (from computedTotals):', siteCostTotal);
+
+    // CRITICAL FIX: Only calculate Materials Total and Labour Total when revenueType is 'cost-margin'
+    let materialsTotal = 0;
+    let labourTotal = 0;
+
+    if (revenueType === 'cost-margin') {
+      // PUSH ARCHITECTURE: Read from formData.computedTotals pushed by MaterialsLabourTab
+      materialsTotal = parseFloat(formData?.computedTotals?.materialsTotal) || 0;
+      console.log('Materials Total (from computedTotals):', materialsTotal);
+
+      // PUSH ARCHITECTURE: Read from formData.computedTotals pushed by MaterialsLabourTab
+      labourTotal = parseFloat(formData?.computedTotals?.labourTotal) || 0;
+      console.log('Labour Total (from computedTotals):', labourTotal);
+    } else {
+      console.log('Chargeable mode: Excluding Materials Total and Labour Total');
+    }
+
+    const manufacturingTotal = budgetValue + internalValueAddedTotal + siteCostTotal + materialsTotal + labourTotal;
+    console.log('Manufacturing Total:', manufacturingTotal);
+
+    // PUSH ARCHITECTURE: Read marginedSubContractorsTotal from formData.computedTotals (pushed by CostMarginTab)
+    // Uses contractedCost (aligned with calculateTotals — fixes the totalCost vs contractedCost inconsistency)
+    const marginedSubContractorsTotal = parseFloat(formData?.computedTotals?.marginedSubContractorsTotal) || 0;
+    console.log('Margined Sub-Contractors Total (from computedTotals):', marginedSubContractorsTotal);
+
+    const subContractedTotal = marginedSubContractorsTotal;
+    console.log('Sub Contracted Total:', subContractedTotal);
+
+    // PUSH ARCHITECTURE: Read zeroMarginedSupplyTotal from formData.computedTotals (pushed by CostMarginTab)
+    const zeroMarginedTotal = parseFloat(formData?.computedTotals?.zeroMarginedSupplyTotal) || 0;
+    console.log('Zero Margined Supply Total (from computedTotals):', zeroMarginedTotal);
+
+    // PUSH ARCHITECTURE: Read logisticsTotal from formData.computedTotals (pushed by LogisticsTab)
+    const logisticsTotal = parseFloat(formData?.computedTotals?.logisticsTotal) || 0;
+    console.log('Logistics Total (from computedTotals):', logisticsTotal);
+
+    const zeroRateTotal = zeroMarginedTotal + logisticsTotal;
+    console.log('Zero Rate Total:', zeroRateTotal);
+
+    const grandTotal = manufacturingTotal + subContractedTotal + zeroRateTotal;
+    console.log('GRAND TOTAL (Manufacturing + Sub Contracted + Zero Rate):', grandTotal);
+    console.log('=== calculateRevenueCentersGrandTotal END ===');
+    
+    return grandTotal;
+  }, [formData?.computedTotals, formData?.revenueCenters?.revenueType, formData?.revenueCenters?.grandTotal]);
+
   // Calculate Chargeable Value - defined early so save functions can use it
   const calculateChargeableValue = useCallback(() => {
-    const savedGrandTotal = formData?.revenueCenters?.grandTotal;
-    if (savedGrandTotal !== undefined && savedGrandTotal !== null) {
-      return savedGrandTotal;
-    }
-    return 0;
+    return formData?.revenueCenters?.grandTotal ?? 0;
   }, [formData?.revenueCenters?.grandTotal]);
 
   // Auto-save functionality
@@ -604,6 +673,14 @@ const NewProposalCreationWorkspace = () => {
     
     if (!proposalIdToUse) {
       console.warn('No proposal ID found for auto-save. Skipping auto-save.');
+      return;
+    }
+
+    // FIX 2: Concurrent save guard — if a save network request is already in flight,
+    // skip this invocation entirely. The dirty flag remains true so the next timer
+    // tick will retry once the in-flight save completes.
+    if (saveInFlightRef?.current) {
+      console.warn('[AutoSave] Skipping — save already in flight');
       return;
     }
 
@@ -618,7 +695,10 @@ const NewProposalCreationWorkspace = () => {
     const currentFormData = formDataRef?.current;
 
     try {
+      saveInFlightRef.current = true;
       setAutoSaveStatus('saving');
+      // FIX 3: Clear dirty flag now that the save is starting
+      isDirtyRef.current = false;
       const { data: updatedProposal, error } = await proposalService?.updateProposal(proposalIdToUse, {
         title: currentFormData?.proposalTitle || currentFormData?.projectTitle || 'Untitled Proposal',
         projectName: currentFormData?.proposalTitle || currentFormData?.projectTitle || 'Untitled Proposal',
@@ -642,14 +722,25 @@ const NewProposalCreationWorkspace = () => {
         commission: currentFormData?.commission || 0,
         commissionItems: currentFormData?.commissionItems || [],
         marginPercentage: currentFormData?.marginPercentage || 0,
+        // FIX 1: Only save revenueType, marginPercentages, totalMarginPercent, and grandTotal.
+        // chargeableData is a computed view of source columns — it is stripped here and
+        // recomputed on load from modules/materials/labour/etc. This cuts payload size
+        // significantly for large proposals.
         revenueCenters: (() => {
           const rc = currentFormData?.revenueCenters;
-          if (rc && typeof rc === 'object' && !Array.isArray(rc)) return rc;
+          if (rc && typeof rc === 'object' && !Array.isArray(rc)) {
+            return {
+              revenueType: rc?.revenueType ?? 'chargeable',
+              marginPercentages: rc?.marginPercentages || {},
+              totalMarginPercent: rc?.totalMarginPercent || 0,
+              grandTotal: rc?.grandTotal || 0,
+            };
+          }
           return {
             revenueType: 'chargeable',
-            chargeableData: {},
             marginPercentages: {},
-            totalMarginPercent: 0
+            totalMarginPercent: 0,
+            grandTotal: 0,
           };
         })(),
         financing: currentFormData?.financing || {},
@@ -693,6 +784,8 @@ const NewProposalCreationWorkspace = () => {
       setLastSaved(new Date());
     } catch (error) {
       console.error('Auto-save failed:', error);
+      // FIX 3: Re-set dirty flag on failure so the next timer tick retries
+      isDirtyRef.current = true;
       setAutoSaveStatus('unsaved');
       // Only show error toast for non-transient errors (not network blips)
       const isTransientNetworkError =
@@ -707,6 +800,9 @@ const NewProposalCreationWorkspace = () => {
           message: error?.message || 'Failed to auto-save proposal. Please save manually.',
         });
       }
+    } finally {
+      // FIX 2: Always release the in-flight lock so future saves can proceed
+      saveInFlightRef.current = false;
     }
   }, [getProposalId, currentProposalId, addToast, calculateChargeableValue, calculateProgress]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -718,16 +814,22 @@ const NewProposalCreationWorkspace = () => {
     handleAutoSaveRef.current = handleAutoSave;
   }, [handleAutoSave]);
 
+  // FIX 3: Auto-save timer now depends on isDirtyRef (a stable ref) instead of formData.
+  // The effect only re-runs when hasBeenSavedOnce or autoSaveStatus changes — NOT on every
+  // keystroke. The dirty flag is set in handleFormChange on the first change after a clean
+  // state, which triggers a single re-render that starts the 30-second countdown once.
+  // Subsequent keystrokes do NOT reset the timer because isDirtyRef is a ref (not state).
   useEffect(() => {
     if (!hasBeenSavedOnce) return;
     if (autoSaveStatus !== 'unsaved') return;
+    if (!isDirtyRef?.current) return;
 
     // Clear existing timer
     if (autoSaveTimerRef?.current) {
       clearTimeout(autoSaveTimerRef?.current);
     }
 
-    // Set new timer for 30 seconds (reduced from 60s for better UX)
+    // Set new timer for 30 seconds
     autoSaveTimerRef.current = setTimeout(() => {
       handleAutoSaveRef?.current();
     }, 30000);
@@ -737,10 +839,11 @@ const NewProposalCreationWorkspace = () => {
         clearTimeout(autoSaveTimerRef?.current);
       }
     };
-  }, [formData, hasBeenSavedOnce, autoSaveStatus]);
-  // ^ formData in deps is intentional: we want the timer to reset when data changes,
-  // but handleAutoSave is NOT in deps (accessed via ref) so the timer doesn't reset
-  // due to callback recreation — only due to actual data changes.
+  }, [hasBeenSavedOnce, autoSaveStatus]);
+  // ^ FIX 3: formData intentionally REMOVED from deps. The timer now starts once when
+  // autoSaveStatus transitions to 'unsaved' (triggered by the first handleFormChange call
+  // that sets isDirtyRef.current = true and calls setAutoSaveStatus('unsaved')).
+  // Subsequent keystrokes update isDirtyRef (a ref, not state) without re-running this effect.
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -774,6 +877,14 @@ const NewProposalCreationWorkspace = () => {
       
       // Mark as unsaved to trigger auto-save
       setAutoSaveStatus('unsaved');
+      // FIX 3: Set dirty flag so the auto-save timer knows data has changed.
+      // The timer effect depends on isDirtyRef, not formData, so the 30-second
+      // countdown only resets when the dirty flag
+      // transitions from false → true (i.e. the first change after a clean state — not on
+      // every subsequent keystroke.
+      if (!isDirtyRef?.current) {
+        isDirtyRef.current = true;
+      }
 
       let nextState;
       // CRITICAL FIX: Keep proposalTitle and projectTitle in sync
@@ -800,6 +911,25 @@ const NewProposalCreationWorkspace = () => {
     handleFormChange(field, value);
   }, [handleFormChange]);
 
+  // COMPUTED TOTALS MERGE HANDLER: Each source tab calls this with its own key/value.
+  // Uses a functional updater so every tab only writes its own key without overwriting
+  // keys written by other tabs — eliminates the spread-overwrite race condition.
+  const handleComputedTotalChange = useCallback((key, value) => {
+    setFormData(prev => {
+      const nextComputedTotals = { ...prev?.computedTotals, [key]: value };
+      // Skip update if value hasn't changed
+      if (prev?.computedTotals?.[key] === value) return prev;
+      let nextState = { ...prev, computedTotals: nextComputedTotals };
+      formDataRef.current = nextState;
+      // Mark dirty so auto-save picks up the change
+      if (!isDirtyRef?.current) {
+        isDirtyRef.current = true;
+        setAutoSaveStatus('unsaved');
+      }
+      return nextState;
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   const handleManualSave = useCallback(async () => {
     // CRITICAL FIX: Use getProposalId helper
@@ -812,11 +942,31 @@ const NewProposalCreationWorkspace = () => {
       return;
     }
 
+    // FIX 2: Concurrent save guard — if an auto-save (or previous manual save) is already
+    // in flight, queue this manual save to run after the in-flight one completes instead of
+    // firing simultaneously. We poll every 200ms for up to 10 seconds.
+    if (saveInFlightRef?.current) {
+      console.warn('[ManualSave] Save already in flight — waiting for it to complete before proceeding');
+      let waited = 0;
+      await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          waited += 200;
+          if (!saveInFlightRef.current || waited >= 10000) {
+            clearInterval(poll);
+            resolve();
+          }
+        }, 200);
+      });
+    }
+
     // CRITICAL FIX: Read from ref to get latest formData (avoids stale closure / timing issue)
     const currentFormData = formDataRef?.current;
 
     try {
+      saveInFlightRef.current = true;
       setAutoSaveStatus('saving');
+      // FIX 3: Clear dirty flag — manual save satisfies the pending change
+      isDirtyRef.current = false;
       
       // Clear any existing timeout
       if (saveTimeoutRef?.current) {
@@ -851,9 +1001,9 @@ const NewProposalCreationWorkspace = () => {
           title: resolvedTitle,
           projectName: resolvedTitle,
           description: currentFormData?.projectType || '',
-          value: calculateChargeableValue() ?? 0,
-          estimatedTotalBudget: calculateChargeableValue() ?? 0,
-          progress: calculateProgress() ?? 0,
+          value: String(calculateChargeableValue() ?? 0),
+          estimatedTotalBudget: String(calculateChargeableValue() ?? 0),
+          progress: String(calculateProgress() ?? 0),
           deadline: currentFormData?.endDate || null,
           startDate: currentFormData?.startDate || null,
           status: 'Draft',
@@ -870,7 +1020,6 @@ const NewProposalCreationWorkspace = () => {
           logistics: currentFormData?.logistics || [],
           commission: currentFormData?.commission || 0,
           commissionItems: currentFormData?.commissionItems || [],
-          marginPercentage: currentFormData?.marginPercentage || 0,
           revenueCenters: (() => {
             const rc = currentFormData?.revenueCenters;
             if (rc && typeof rc === 'object' && !Array.isArray(rc)) return rc;
@@ -883,7 +1032,6 @@ const NewProposalCreationWorkspace = () => {
           marginedSubContractors: currentFormData?.marginedSubContractors || [],
           zeroMarginedSupply: currentFormData?.zeroMarginedSupply || [],
           projectDetails: {
-            clientId: currentFormData?.clientId || '',
             projectName: currentFormData?.projectName || '',
             projectType: currentFormData?.projectType || '',
             clientType: currentFormData?.clientType || '',
@@ -962,9 +1110,9 @@ const NewProposalCreationWorkspace = () => {
           title: resolvedTitle,
           projectName: resolvedTitle,
           description: currentFormData?.projectType || '',
-          value: calculateChargeableValue() ?? 0,
-          estimatedTotalBudget: calculateChargeableValue() ?? 0,
-          progress: calculateProgress() ?? 0,
+          value: String(calculateChargeableValue() ?? 0),
+          estimatedTotalBudget: String(calculateChargeableValue() ?? 0),
+          progress: String(calculateProgress() ?? 0),
           deadline: currentFormData?.endDate || null,
           startDate: currentFormData?.startDate || null,
           status: 'Draft',
@@ -981,7 +1129,6 @@ const NewProposalCreationWorkspace = () => {
           logistics: currentFormData?.logistics || [],
           commission: currentFormData?.commission || 0,
           commissionItems: currentFormData?.commissionItems || [],
-          marginPercentage: currentFormData?.marginPercentage || 0,
           revenueCenters: (() => {
             const rc = currentFormData?.revenueCenters;
             if (rc && typeof rc === 'object' && !Array.isArray(rc)) return rc;
@@ -990,13 +1137,10 @@ const NewProposalCreationWorkspace = () => {
           financing: currentFormData?.financing || {},
           risks: currentFormData?.risks || [],
           paymentTerms: currentFormData?.paymentTerms || {},
-          // Additional Scope data
           internalValueAddedScope: currentFormData?.internalValueAddedScope || [],
           marginedSubContractors: currentFormData?.marginedSubContractors || [],
           zeroMarginedSupply: currentFormData?.zeroMarginedSupply || [],
-          // Project Details data
           projectDetails: {
-            clientId: currentFormData?.clientId || '',
             projectName: currentFormData?.projectName || '',
             projectType: currentFormData?.projectType || '',
             clientType: currentFormData?.clientType || '',
@@ -1009,7 +1153,6 @@ const NewProposalCreationWorkspace = () => {
             scope: currentFormData?.scope || [],
             selectedMapLocation: currentFormData?.selectedMapLocation || null
           },
-          // Project Duration data
           projectDuration: {
             design: currentFormData?.design || {},
             procurement: currentFormData?.procurement || {},
@@ -1043,149 +1186,12 @@ const NewProposalCreationWorkspace = () => {
         setAutoSaveStatus('unsaved');
         addToast({ type: 'error', title: 'Save Failed', message: error?.message || 'Failed to save proposal. Please try again.' });
       }
+    } finally {
+      // FIX 2: Always release the in-flight lock so future saves can proceed
+      saveInFlightRef.current = false;
     }
   }, [getProposalId, isLoadingProposal, SAVE_QUEUE_ENABLED, saveQueue, currentProposalId, isMountedRef, addToast, calculateChargeableValue, calculateProgress]); // eslint-disable-line react-hooks/exhaustive-deps
   // ^ formData intentionally excluded — reads from formDataRef.current to avoid stale closure
-
-  // Calculate Revenue Centers Grand Total (Chargeable)
-  const calculateRevenueCentersGrandTotal = useCallback(() => {
-    console.log('=== calculateRevenueCentersGrandTotal START ===');
-    
-    // Get revenue type to determine if we should include Materials and Labour
-    const revenueType = formData?.revenueCenters?.revenueType || 'chargeable';
-    console.log('Revenue Type:', revenueType);
-
-    // Calculate Module Configuration - Budget Value
-    const budgetValue = (formData?.modules || [])?.reduce((sum, module) => {
-      const quantity = parseFloat(module?.quantity) || 0;
-      const budgetValue = parseFloat(module?.budgetValue) || 0;
-      const moduleBudget = quantity * budgetValue;
-      console.log('Module:', { name: module?.name, quantity, budgetValue, moduleBudget });
-      return sum + moduleBudget;
-    }, 0);
-    console.log('Budget Value (Module Configuration):', budgetValue);
-
-    // Calculate Internal Value-Added Scope Total
-    const internalValueAddedTotal = (formData?.internalValueAddedScope || [])?.reduce((sum, item) => {
-      const total = parseFloat(item?.productionCost) || 0;
-      console.log('Internal Value-Added:', { description: item?.description, total });
-      return sum + total;
-    }, 0);
-    console.log('Internal Value-Added Total:', internalValueAddedTotal);
-
-    const siteCostTotal = (formData?.siteCosts || [])?.reduce((sum, item) => {
-      const total = parseFloat(item?.total) || 0;
-      console.log('Site Cost:', { description: item?.description, total });
-      return sum + total;
-    }, 0);
-    console.log('Site Cost Total:', siteCostTotal);
-
-    // CRITICAL FIX: Only calculate Materials Total and Labour Total when revenueType is 'cost-margin'
-    // Chargeable mode = sale price-based (exclude cost items)
-    // Cost + Margin mode = cost price-based (include cost items)
-    let materialsTotal = 0;
-    let labourTotal = 0;
-
-    if (revenueType === 'cost-margin') {
-      // Fix Materials Total - Use Project Mod Total formula: ($ / Ft² / W Total) × totalAreaFt2
-      materialsTotal = (() => {
-        // Get total area from Modular Build Up (in Ft²)
-        const modules = formData?.modules || [];
-        const totalAreaFt2 = modules?.reduce((sum, m) => {
-          const quantity = parseFloat(m?.quantity) || 0;
-          const areaFt2 = parseFloat(m?.areaFeet) || 0;
-          const moduleArea = quantity * areaFt2;
-          console.log('Module Area:', { name: m?.name, quantity, areaFt2, moduleArea });
-          return sum + moduleArea;
-        }, 0);
-        console.log('Total Area (Ft²):', totalAreaFt2);
-
-        // Calculate $ / Ft² / W Total (sum of all costWastePSQF)
-        const materials = formData?.materials || [];
-        const costPerSqFtTotal = materials?.reduce((sum, item) => sum + (parseFloat(item?.costWastePSQF) || 0), 0);
-        console.log('Cost Per Sq Ft Total ($ / Ft² / W Total):', costPerSqFtTotal);
-
-        // Project Mod Total = costPerSqFtTotal × totalAreaFt2
-        const projectModTotal = costPerSqFtTotal * totalAreaFt2;
-        console.log('Materials Total (Project Mod Total = costPerSqFtTotal × totalAreaFt2):', projectModTotal);
-        return projectModTotal;
-      })();
-
-      // Add Labour Total using Project Mod Total formula: (Labour Total ÷ smallestModuleAreaFt2) × totalAreaFt2
-      labourTotal = (() => {
-        const labourRawTotal = (formData?.labour || [])?.reduce((sum, item) => {
-          const total = parseFloat(item?.total) || 0;
-          return sum + total;
-        }, 0);
-        const categoryPriority = ['ppvc-module', 'floor-cassettes', 'roof-cassettes', 'roof-modules-flat', 'roof-module-pitched', 'roof-module-hybrid', 'panelized-module', 'kit-of-parts'];
-        const modules = formData?.modules || [];
-        const totalAreaFt2 = modules?.reduce((sum, m) => {
-          const quantity = parseFloat(m?.quantity) || 0;
-          const areaFt2 = parseFloat(m?.areaFeet) || 0;
-          return sum + (quantity * areaFt2);
-        }, 0);
-        let smallestModuleAreaFt2 = 0;
-        for (const category of categoryPriority) {
-          const categoryModules = modules?.filter(m => m?.category === category);
-          if (categoryModules?.length > 0) {
-            const smallestModule = categoryModules?.reduce((min, module) => {
-              const currentAreaFt2 = parseFloat(module?.areaFeet) || 0;
-              const minAreaFt2 = parseFloat(min?.areaFeet) || 0;
-              return currentAreaFt2 < minAreaFt2 ? module : min;
-            }, categoryModules?.[0]);
-            smallestModuleAreaFt2 = parseFloat(smallestModule?.areaFeet) || 0;
-            break;
-          }
-        }
-        const labourCostPSQF = smallestModuleAreaFt2 > 0 ? labourRawTotal / smallestModuleAreaFt2 : 0;
-        const projectModTotal = labourCostPSQF * totalAreaFt2;
-        console.log('Labour Total (Project Mod Total):', projectModTotal, '= (', labourRawTotal, '/', smallestModuleAreaFt2, ') ×', totalAreaFt2);
-        return projectModTotal;
-      })();
-      console.log('Labour Total (Project Mod Total):', labourTotal);
-    } else {
-      console.log('Chargeable mode: Excluding Materials Total and Labour Total');
-    }
-
-    const manufacturingTotal = budgetValue + internalValueAddedTotal + siteCostTotal + materialsTotal + labourTotal;
-    console.log('Manufacturing Total:', manufacturingTotal, '=', budgetValue, '+', internalValueAddedTotal, '+', siteCostTotal, '+', materialsTotal, '+', labourTotal);
-
-    // Calculate Sub Contracted Total (from Margined Sub-Contractors)
-    const marginedSubContractorsTotal = (formData?.marginedSubContractors || [])?.reduce((sum, item) => {
-      const totalCost = parseFloat(item?.totalCost) || 0;
-      console.log('Margined Sub-Contractor:', { description: item?.description, totalCost });
-      return sum + totalCost;
-    }, 0);
-    console.log('Margined Sub-Contractors Total:', marginedSubContractorsTotal);
-
-    const subContractedTotal = marginedSubContractorsTotal;
-    console.log('Sub Contracted Total:', subContractedTotal);
-
-    // Calculate Zero Rate Total (from Zero Margined Supply + Total Logistics)
-    const zeroMarginedTotal = (formData?.zeroMarginedSupply || [])?.reduce((sum, item) => {
-      return sum + (parseFloat(item?.totalCost) || 0);
-    }, 0);
-    console.log('Zero Margined Supply Total:', zeroMarginedTotal);
-
-    const logisticsTotal = (formData?.logistics || [])?.length > 0
-      ? (parseFloat(formData?.logistics?.[0]?.totalLogistics) || 0)
-      : 0;
-    console.log('Logistics Total:', logisticsTotal);
-
-    const zeroRateTotal = zeroMarginedTotal + logisticsTotal;
-    console.log('Zero Rate Total:', zeroRateTotal, '=', zeroMarginedTotal, '+', logisticsTotal);
-
-    // CRITICAL FIX: Return ONLY Manufacturing + Sub Contracted + Zero Rate
-    // This should equal $8,957,261.04 (the Grand Total shown in Revenue Centers tab)
-    const grandTotal = manufacturingTotal + subContractedTotal + zeroRateTotal;
-    console.log('GRAND TOTAL (Manufacturing + Sub Contracted + Zero Rate):', grandTotal);
-    console.log('  Manufacturing:', manufacturingTotal);
-    console.log('  Sub Contracted:', subContractedTotal);
-    console.log('  Zero Rate:', zeroRateTotal);
-    console.log('=== calculateRevenueCentersGrandTotal END ===');
-    
-    return grandTotal;
-  }, [formData?.modules, formData?.internalValueAddedScope, formData?.siteCosts, formData?.materials, formData?.labour, formData?.marginedSubContractors, formData?.zeroMarginedSupply, formData?.logistics, formData?.revenueCenters?.revenueType, formData?.revenueCenters?.grandTotal]);
 
   // Calculate Chargeable Value WITHOUT Zero Rate (NEW FORMULA)
   const calculateChargeableValueWithoutZeroRate = useCallback(() => {
@@ -1196,7 +1202,7 @@ const NewProposalCreationWorkspace = () => {
     
     // Calculate Zero Margined Supply Total
     const zeroMarginedTotal = (formData?.zeroMarginedSupply || [])?.reduce((sum, item) => {
-      return sum + (parseFloat(item?.totalCost) || 0);
+      return sum + (parseFloat(item?.productionCost) || 0);
     }, 0);
     
     // Calculate Total Logistics
@@ -1323,7 +1329,7 @@ const NewProposalCreationWorkspace = () => {
       { name: 'Margined Sub-Contractors', value: proposalTotals?.marginedSubContractors },
       { name: 'Zero Margined Supply', value: proposalTotals?.zeroMarginedSupply },
       { name: 'Materials', value: proposalTotals?.materials },
-      { name: 'Labor', value: proposalTotals?.labour },
+      { name: 'Labour', value: proposalTotals?.labour },
       { name: 'Total Over Head', value: proposalTotals?.totalOverHead },
       { name: 'Site Cost Total', value: proposalTotals?.siteCostsTotal },
       { name: 'Total Logistics', value: proposalTotals?.logisticsTotal },
@@ -1348,105 +1354,55 @@ const NewProposalCreationWorkspace = () => {
   // Add this block - Calculate proposal totals whenever formData changes
   useEffect(() => {
     const calculateTotals = () => {
-      // Calculate Internal Value-Added Total
-      const internalValueAdded = (formData?.internalValueAddedScope || [])?.reduce((sum, item) => {
-        return sum + (parseFloat(item?.productionCost) || 0);
-      }, 0);
+      // PUSH ARCHITECTURE: Read internalValueAdded from formData.computedTotals (pushed by CostMarginTab)
+      const internalValueAdded = parseFloat(formData?.computedTotals?.internalValueAddedTotal) || 0;
 
-      // Calculate Margined Sub-Contractors Total
-      const marginedSubContractors = (formData?.marginedSubContractors || [])?.reduce((sum, item) => {
-        return sum + (parseFloat(item?.totalCost) || 0);
-      }, 0);
+      // PUSH ARCHITECTURE: Read marginedSubContractors from formData.computedTotals (pushed by CostMarginTab)
+      // Uses contractedCost — aligned with calculateRevenueCentersGrandTotal (fixes inconsistency)
+      const marginedSubContractors = parseFloat(formData?.computedTotals?.marginedSubContractorsTotal) || 0;
 
-      // Calculate Zero Margined Supply Total
-      const zeroMarginedSupply = (formData?.zeroMarginedSupply || [])?.reduce((sum, item) => {
-        return sum + (parseFloat(item?.totalCost) || 0);
-      }, 0);
+      // PUSH ARCHITECTURE: Read zeroMarginedTotal from formData.computedTotals (pushed by CostMarginTab)
+      const zeroMarginedTotal = parseFloat(formData?.computedTotals?.zeroMarginedSupplyTotal) || 0;
 
       // Calculate Materials Total (Project Mod Total)
-      const materials = (() => {
-        const modules = formData?.modules || [];
-        const totalAreaFt2 = modules?.reduce((sum, m) => {
-          const quantity = parseFloat(m?.quantity) || 0;
-          const areaFt2 = parseFloat(m?.areaFeet) || 0;
-          return sum + (quantity * areaFt2);
-        }, 0);
-        const materialsList = formData?.materials || [];
-        const costPerSqFtTotal = materialsList?.reduce((sum, item) => sum + (parseFloat(item?.costWastePSQF) || 0), 0);
-        return costPerSqFtTotal * totalAreaFt2;
-      })();
+      const materials = parseFloat(formData?.computedTotals?.materialsTotal) || 0;
 
       // Calculate Labour Total (Project Mod Total)
-      const labour = (() => {
-        const labourRawTotal = (formData?.labour || [])?.reduce((sum, item) => {
-          return sum + (parseFloat(item?.total) || 0);
-        }, 0);
-        const modules = formData?.modules || [];
-        const totalAreaFt2 = modules?.reduce((sum, m) => {
-          const quantity = parseFloat(m?.quantity) || 0;
-          const areaFt2 = parseFloat(m?.areaFeet) || 0;
-          return sum + (quantity * areaFt2);
-        }, 0);
-        const categoryPriority = ['ppvc-module', 'floor-cassettes', 'roof-cassettes', 'roof-modules-flat', 'roof-module-pitched', 'roof-module-hybrid', 'panelized-module', 'kit-of-parts'];
-        let smallestModuleAreaFt2 = 0;
-        for (const category of categoryPriority) {
-          const categoryModules = modules?.filter(m => m?.category === category);
-          if (categoryModules?.length > 0) {
-            const smallestModule = categoryModules?.reduce((min, module) => {
-              const currentAreaFt2 = parseFloat(module?.areaFeet) || 0;
-              const minAreaFt2 = parseFloat(min?.areaFeet) || 0;
-              return currentAreaFt2 < minAreaFt2 ? module : min;
-            }, categoryModules?.[0]);
-            smallestModuleAreaFt2 = parseFloat(smallestModule?.areaFeet) || 0;
-            break;
-          }
-        }
-        const labourCostPSQF = smallestModuleAreaFt2 > 0 ? labourRawTotal / smallestModuleAreaFt2 : 0;
-        return labourCostPSQF * totalAreaFt2;
-      })();
+      const labour = parseFloat(formData?.computedTotals?.labourTotal) || 0;
 
       // Calculate Total Over Head
-      const totalOverHead = Object.values(formData?.overheadCalculations || {})?.reduce((sum, val) => {
-        const duration = parseFloat(val?.duration) || 0;
-        const overHeadPerWeek = parseFloat(val?.overHeadPerWeek) || 0;
-        const allocation = parseFloat(val?.allocation) || 0;
-        const contingency = parseFloat(val?.contingency) || 0;
-        const sectionTotal = duration * overHeadPerWeek * (allocation / 100) * (1 + contingency / 100);
-        return sum + sectionTotal;
-      }, 0);
+      const totalOverHead = parseFloat(formData?.computedTotals?.overheadsTotal) || 0;
 
-      // Calculate Site Costs Total
-      const siteCostsTotal = (formData?.siteCosts || [])?.reduce((sum, item) => {
-        return sum + (parseFloat(item?.total) || 0);
-      }, 0);
+      // PUSH ARCHITECTURE: Read siteCostsTotal from formData.computedTotals (pushed by SiteCostsTab)
+      const siteCostsTotal = parseFloat(formData?.computedTotals?.siteCostsTotal) || 0;
 
-      // Calculate Logistics Total
-      const logisticsTotal = (formData?.logistics || [])?.length > 0
-        ? (parseFloat(formData?.logistics?.[0]?.totalLogistics) || 0)
-        : 0;
+      // PUSH ARCHITECTURE: Read logisticsTotal from formData.computedTotals (pushed by LogisticsTab)
+      const logisticsTotal = parseFloat(formData?.computedTotals?.logisticsTotal) || 0;
 
-      // Calculate Commission
-      const commission = (formData?.commissionItems || [])?.reduce((sum, item) => {
-        return sum + (parseFloat(item?.total) || 0);
-      }, 0);
+      // PUSH ARCHITECTURE: Read commissionTotal from formData.computedTotals (pushed by CommissionTab)
+      const commission = parseFloat(formData?.computedTotals?.commissionTotal) || 0;
 
-      // Calculate Finance
-      const finance = parseFloat(formData?.financing?.totalFinanceCost) || 0;
+      // PUSH ARCHITECTURE: Read financingTotal from formData.computedTotals (pushed by FinancingTab)
+      const finance = parseFloat(formData?.computedTotals?.financingTotal) || 0;
 
-      // Calculate Risk
-      const risk = (formData?.risks || [])?.reduce((sum, item) => {
-        return sum + (parseFloat(item?.cost) || 0);
-      }, 0);
+      // Risk is percentage-based (not a dollar total stored per item), keep as 0
+      const risk = 0;
+
+      // FIX 2: Conditionally exclude materials and labour from grandTotal when
+      // revenueType is 'chargeable' — matching Revenue Centers tab logic.
+      const revenueType = formData?.revenueCenters?.revenueType || 'chargeable';
+      const materialsForTotal = revenueType === 'chargeable' ? 0 : materials;
+      const labourForTotal = revenueType === 'chargeable' ? 0 : labour;
 
       // Calculate Grand Total
-      const grandTotal = internalValueAdded + marginedSubContractors + zeroMarginedSupply + 
-                        materials + labour + totalOverHead + siteCostsTotal + logisticsTotal + 
+      const grandTotal = internalValueAdded + marginedSubContractors + zeroMarginedTotal +
+                        materialsForTotal + labourForTotal + totalOverHead + siteCostsTotal + logisticsTotal +
                         commission + finance + risk;
 
       setProposalTotals({
         internalValueAdded,
         marginedSubContractors,
-        zeroMarginedSupply,
+        zeroMarginedSupply: zeroMarginedTotal,
         materials,
         labour,
         totalOverHead,
@@ -1551,7 +1507,7 @@ const NewProposalCreationWorkspace = () => {
                     { label: 'Margined Sub-Contractors', value: proposalTotals?.marginedSubContractors },
                     { label: 'Zero Margined Supply', value: proposalTotals?.zeroMarginedSupply },
                     { label: 'Materials', value: proposalTotals?.materials },
-                    { label: 'Labor', value: proposalTotals?.labour },
+                    { label: 'Labour', value: proposalTotals?.labour },
                     { label: 'Total Over Head', value: proposalTotals?.totalOverHead },
                     { label: 'Site Cost Total', value: proposalTotals?.siteCostsTotal },
                     { label: 'Total Logistics', value: proposalTotals?.logisticsTotal },
@@ -1599,31 +1555,31 @@ const NewProposalCreationWorkspace = () => {
         </div>
         {/* Modular Build Up Tab */}
         <div style={{ display: activeTab === 'modular-build-up' ? 'block' : 'none' }}>
-          <ModularBuildUpTab formData={formData} onChange={handleChange} errors={{}} />
+          <ModularBuildUpTab formData={formData} onChange={handleChange} onComputedTotalChange={handleComputedTotalChange} errors={{}} />
         </div>
         {/* Cost + Margin Tab */}
         <div style={{ display: activeTab === 'cost-margin' ? 'block' : 'none' }}>
-          <CostMarginTab formData={formData} onChange={handleChange} errors={{}} />
+          <CostMarginTab formData={formData} onChange={handleChange} onComputedTotalChange={handleComputedTotalChange} errors={{}} />
         </div>
         {/* Materials + Labour Tab */}
         <div style={{ display: activeTab === 'materials-labour' ? 'block' : 'none' }}>
-          <MaterialsLabourTab formData={formData} onChange={handleChange} errors={{}} />
+          <MaterialsLabourTab formData={formData} onChange={handleChange} onComputedTotalChange={handleComputedTotalChange} errors={{}} />
         </div>
         {/* Over Heads Tab */}
         <div style={{ display: activeTab === 'over-heads' ? 'block' : 'none' }}>
-          <OverHeadsTab formData={formData} onChange={handleChange} errors={{}} />
+          <OverHeadsTab formData={formData} onChange={handleChange} onComputedTotalChange={handleComputedTotalChange} errors={{}} />
         </div>
         {/* Site Costs Tab */}
         <div style={{ display: activeTab === 'site-costs' ? 'block' : 'none' }}>
-          <SiteCostsTab formData={formData} onChange={handleChange} errors={{}} />
+          <SiteCostsTab formData={formData} onChange={handleChange} onComputedTotalChange={handleComputedTotalChange} errors={{}} />
         </div>
         {/* Logistics Tab */}
         <div style={{ display: activeTab === 'logistics' ? 'block' : 'none' }}>
-          <LogisticsTab formData={formData} onChange={handleChange} errors={{}} />
+          <LogisticsTab formData={formData} onChange={handleChange} onComputedTotalChange={handleComputedTotalChange} errors={{}} />
         </div>
         {/* Commission Tab */}
         <div style={{ display: activeTab === 'commission' ? 'block' : 'none' }}>
-          <CommissionTab formData={formData} onChange={handleChange} errors={{}} />
+          <CommissionTab formData={formData} onChange={handleChange} onComputedTotalChange={handleComputedTotalChange} errors={{}} />
         </div>
         {/* Revenue Centers Tab */}
         <div style={{ display: activeTab === 'revenue-centers' ? 'block' : 'none' }}>
@@ -1631,7 +1587,7 @@ const NewProposalCreationWorkspace = () => {
         </div>
         {/* Financing Tab */}
         <div style={{ display: activeTab === 'financing' ? 'block' : 'none' }}>
-          <FinancingTab formData={formData} onChange={handleChange} errors={{}} />
+          <FinancingTab formData={formData} onChange={handleChange} onComputedTotalChange={handleComputedTotalChange} errors={{}} />
         </div>
         {/* Risk Tab */}
         <div style={{ display: activeTab === 'risk' ? 'block' : 'none' }}>

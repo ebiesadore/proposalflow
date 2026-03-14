@@ -200,3 +200,103 @@ export const additionalScopeService = {
         }
     },
 };
+
+// Scope Categories Service
+export const scopeCategoryService = {
+    // Get all categories
+    async getAllCategories() {
+        return withRetry(async () => {
+            const { data, error } = await supabase
+                ?.from("scope_categories")
+                ?.select("*")
+                ?.order("label", { ascending: true });
+
+            if (error) {
+                if (isSchemaError(error)) {
+                    console.error("Schema error:", error?.message);
+                    throw error;
+                }
+                console.error("Data error:", error?.message);
+                return [];
+            }
+
+            return toCamelCase(data || []);
+        }, "getAllCategories");
+    },
+
+    // Create category
+    async createCategory(categoryData) {
+        return withRetry(async () => {
+            const snakeCaseData = toSnakeCase(categoryData);
+
+            const { data, error } = await supabase
+                ?.from("scope_categories")
+                ?.insert(snakeCaseData)
+                ?.select()
+                ?.single();
+
+            if (error) {
+                if (isSchemaError(error)) {
+                    console.error("Schema error:", error?.message);
+                    throw error;
+                }
+                console.error("Data error:", error?.message);
+                throw new Error(error?.message || "Failed to create category");
+            }
+
+            return toCamelCase(data);
+        }, "createCategory");
+    },
+
+    // Update category
+    async updateCategory(id, categoryData) {
+        try {
+            const snakeCaseData = toSnakeCase({ ...categoryData, updatedAt: new Date()?.toISOString() });
+
+            const { data, error } = await supabase
+                ?.from("scope_categories")
+                ?.update(snakeCaseData)
+                ?.eq("id", id)
+                ?.select()
+                ?.single();
+
+            if (error) {
+                if (isSchemaError(error)) {
+                    console.error("Schema error:", error?.message);
+                    throw error;
+                }
+                console.error("Data error:", error?.message);
+                throw new Error(error?.message || "Failed to update category");
+            }
+
+            return toCamelCase(data);
+        } catch (error) {
+            console.error("Error updating category:", error);
+            throw error;
+        }
+    },
+
+    // Delete category
+    async deleteCategory(id) {
+        try {
+            const { error } = await supabase
+                ?.from("scope_categories")
+                ?.delete()
+                ?.eq("id", id);
+
+            if (error) {
+                if (isSchemaError(error)) {
+                    console.error("Schema error:", error?.message);
+                    throw error;
+                }
+                console.error("Data error:", error?.message);
+                throw new Error(error?.message || "Failed to delete category");
+            }
+
+            return true;
+        } catch (error) {
+            console.error("Error deleting category:", error);
+            throw error;
+        }
+    },
+};

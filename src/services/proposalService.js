@@ -211,8 +211,10 @@ export const proposalService = {
             console.log("Proposal Data Keys:", Object.keys(proposalData));
             console.log("CLIENT ID VALUE:", proposalData?.clientId);
             console.log("CLIENT ID TYPE:", typeof proposalData?.clientId);
-            console.log("Materials data:", proposalData?.materials);
-            console.log("Labour data:", proposalData?.labour);
+            // FIX 4: Log array lengths only — logging full arrays serialises hundreds of
+            // objects to the console on every save, which grows with data size.
+            console.log("Materials count:", proposalData?.materials?.length ?? 0);
+            console.log("Labour count:", proposalData?.labour?.length ?? 0);
             console.log("Estimation Model:", proposalData?.estimationModel);
             console.log("===========================");
 

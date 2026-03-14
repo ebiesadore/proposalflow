@@ -192,3 +192,112 @@ export const externalTradeService = {
         }
     },
 };
+
+export const tradeCategoryService = {
+    async getAllCategories() {
+        try {
+            const user = await getAuthUser();
+            const { data, error } = await supabase
+                ?.from("trade_categories")
+                ?.select("*")
+                ?.eq("user_id", user?.id)
+                ?.order("label", { ascending: true });
+
+            if (error) {
+                console.error("Error fetching trade categories:", error?.message);
+                return [];
+            }
+            return toCamelCase(data || []);
+        } catch (err) {
+            console.error("Error in getAllCategories:", err?.message);
+            return [];
+        }
+    },
+
+    async createCategory(categoryData) {
+        return withRetry(async () => {
+            const user = await getAuthUser();
+            const { data, error } = await supabase
+                ?.from("trade_categories")
+                ?.insert(toSnakeCase({ ...categoryData, userId: user?.id }))
+                ?.select()
+                ?.single();
+
+            if (error) {
+                if (isSchemaError(error)) throw error;
+                throw new Error(error.message || "Failed to create category");
+            }
+            return toCamelCase(data);
+        }, "createTradeCategory");
+    },
+
+    async updateCategory(id, categoryData) {
+        try {
+            const user = await getAuthUser();
+            const { data, error } = await supabase
+                ?.from("trade_categories")
+                ?.update(toSnakeCase(categoryData))
+                ?.eq("id", id)
+                ?.eq("user_id", user?.id)
+                ?.select()
+                ?.single();
+
+            if (error) {
+                if (isSchemaError(error)) throw error;
+                throw new Error(error.message || "Failed to update category");
+            }
+            return toCamelCase(data);
+        } catch (error) {
+            console.error("Error updating trade category:", error);
+            throw error;
+        }
+    },
+
+    async deleteCategory(id) {
+        try {
+            const user = await getAuthUser();
+            const { error } = await supabase
+                ?.from("trade_categories")
+                ?.delete()
+                ?.eq("id", id)
+                ?.eq("user_id", user?.id);
+
+            if (error) {
+                if (isSchemaError(error)) throw error;
+                throw new Error(error.message || "Failed to delete category");
+            }
+            return true;
+        } catch (error) {
+            console.error("Error deleting trade category:", error);
+            throw error;
+        }
+    },
+
+    async seedDefaultCategories() {
+        try {
+            const user = await getAuthUser();
+            const defaults = [
+                { value: "electrical", label: "Electrical" },
+                { value: "plumbing", label: "Plumbing" },
+                { value: "hvac", label: "HVAC" },
+                { value: "carpentry", label: "Carpentry" },
+                { value: "masonry", label: "Masonry" },
+                { value: "painting", label: "Painting" },
+                { value: "roofing", label: "Roofing" },
+                { value: "flooring", label: "Flooring" },
+                { value: "specilist", label: "Specilist" },
+                { value: "fire_safty", label: "Fire Safty" },
+                { value: "steel_fabricator", label: "Steel Fabricator" },
+                { value: "automation", label: "Automation" },
+                { value: "plasterers", label: "Plasterers" },
+            ];
+            const rows = defaults?.map((c) => ({ ...toSnakeCase(c), user_id: user?.id }));
+            const { error } = await supabase
+                ?.from("trade_categories")
+                ?.upsert(rows, { onConflict: "value,user_id", ignoreDuplicates: true });
+            if (error) console.error("Seed error:", error?.message);
+        } catch (err) {
+            console.error("Error seeding trade categories:", err?.message);
+        }
+    },
+};
